@@ -25,7 +25,6 @@ dependencies = [
   "nxdk-pgraph-test-repacker>=0.1.0",
   "requests~=2.32",
   "GitPython~=3.1",
-  "frozendict~=2.4",
 ]
 
 [project.optional-dependencies]
@@ -50,9 +49,14 @@ Source = "https://github.com/abaire/xemu-pgraph-ci-tools"
 [tool.hatch.version]
 path = "src/xemu_pgraph_ci_tools/__about__.py"
 
+[tool.hatch.envs.hatch-static-analysis]
+dependencies = [
+  "ruff==0.15.17",
+]
+
 [tool.hatch.envs.types]
 extra-dependencies = [
-  "mypy>=1.0.0",
+  "mypy==1.15.0",
   "pytest",
   "types-requests",
 ]
