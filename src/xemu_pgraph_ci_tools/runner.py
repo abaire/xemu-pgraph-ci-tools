@@ -220,6 +220,142 @@ def _download_xemu_hdd(output_dir: str, tag: str = "latest") -> str | None:
     return None
 
 
+def _macos_extract_app(archive_file: str, target_app_bundle: str) -> None:
+    """Extracts the xemu.app bundle from the given archive and renames it."""
+    app_bundle_directory = os.path.dirname(target_app_bundle)
+
+    try:
+        with zipfile.ZipFile(archive_file, "r") as zip_ref:
+            os.makedirs(app_bundle_directory, exist_ok=True)
+
+            for file_info in zip_ref.infolist():
+                if file_info.filename.startswith("xemu.app/") and not file_info.is_dir():
+                    zip_ref.extract(file_info, app_bundle_directory)
+
+            if not os.path.isfile(os.path.join(app_bundle_directory, "xemu.app", "Contents", "MacOS", "xemu")):
+                msg = f"xemu archive was downloaded at '{archive_file}' but app bundle could not be extracted"
+                raise ValueError(msg)
+
+    except FileNotFoundError:
+        logger.exception("Archive not found when extracting xemu app bundle")
+        raise
+    except zipfile.BadZipFile:
+        logger.exception("Invalid zip archive when extracting xemu app bundle")
+        raise
+
+
+def _windows_extract_app(archive_file: str, target_executable: str) -> None:
+    """Extracts xemu.exe from the given archive."""
+    try:
+        with zipfile.ZipFile(archive_file, "r") as zip_ref:
+            for file_info in zip_ref.infolist():
+                if file_info.filename == "xemu.exe":
+                    target_dir = os.path.dirname(target_executable)
+                    zip_ref.extract(file_info, target_dir)
+                    if os.path.basename(target_executable) != "xemu.exe":
+                        os.rename(os.path.join(target_dir, "xemu.exe"), target_executable)
+                    return
+
+    except FileNotFoundError:
+        logger.exception("Archive not found when extracting xemu.exe")
+        raise
+    except zipfile.BadZipFile:
+        logger.exception("Invalid zip archive when extracting xemu.exe")
+        raise
+
+
+def _download_xemu(output_dir: str, tag: str = "latest") -> str | None:
+    logger.info("Fetching info on xemu at release tag %s...", tag)
+    release_info = _fetch_github_release_info("https://api.github.com/repos/xemu-project/xemu", tag)
+    if not release_info:
+        return None
+
+    release_tag = release_info.get("tag_name")
+    if not release_tag:
+        logger.error("Failed to retrieve release tag from GitHub.")
+        return None
+
+    system = platform.system()
+    if system == "Linux":
+
+        def check_asset(asset_name: str) -> bool:
+            if not asset_name.startswith("xemu-") or "-dbg-" in asset_name:
+                return False
+            return asset_name.endswith(".AppImage") and platform.machine() in asset_name
+    elif system == "Darwin":
+
+        def check_asset(asset_name: str) -> bool:
+            return asset_name == "xemu-macos-universal-release.zip" or asset_name.endswith(
+                "-macos-universal-unsigned.zip"
+            )
+    elif system == "Windows":
+
+        def check_asset(asset_name: str) -> bool:
+            if not asset_name.startswith("xemu-win-") or not asset_name.endswith("release.zip"):
+                return False
+            platform_name = platform.machine()
+            if platform_name == "AMD64":
+                platform_name = "x86_64"
+            return platform_name.lower() in asset_name
+    else:
+        msg = f"System '{system}' not supported"
+        raise NotImplementedError(msg)
+
+    asset_name = ""
+    download_url = ""
+    for asset in release_info.get("assets", []):
+        asset_name = asset.get("name", "")
+        if not check_asset(asset_name):
+            continue
+        download_url = asset.get("browser_download_url", "")
+        break
+
+    if not download_url:
+        logger.error("Failed to fetch download URL for latest xemu release")
+        return None
+
+    if system == "Linux":
+        target_file = os.path.join(output_dir, asset_name)
+        artifact_path_override = None
+    elif system == "Darwin":
+        target_file = os.path.join(output_dir, f"xemu-macos-{release_tag}", "xemu.app")
+        artifact_path_override = f"{target_file}.zip"
+    elif system == "Windows":
+        target_file = os.path.join(output_dir, "xemu.exe")
+        artifact_path_override = f"{target_file}.zip"
+    else:
+        msg = f"System '{system}' not supported"
+        raise NotImplementedError(msg)
+
+    tag_info_file_path = os.path.join(output_dir, "xemu-tag.info")
+
+    requested_version = release_info.get("tag_name")
+    if not requested_version or not os.path.isfile(tag_info_file_path):
+        force_download = True
+    else:
+        with open(tag_info_file_path) as tag_info_file:
+            cached_tag = tag_info_file.readline().strip()
+            force_download = cached_tag != requested_version
+
+    was_downloaded = _download_artifact(
+        target_file, download_url, artifact_path_override, force_download=force_download
+    )
+
+    if was_downloaded:
+        if system == "Linux":
+            os.chmod(target_file, 0o700)
+        elif system == "Darwin" and artifact_path_override:
+            _macos_extract_app(artifact_path_override, target_file)
+        elif system == "Windows" and artifact_path_override:
+            _windows_extract_app(artifact_path_override, target_file)
+
+        if requested_version:
+            with open(tag_info_file_path, "w") as tag_info_file:
+                tag_info_file.write(requested_version)
+
+    return target_file
+
+
 def _ensure_path(path: str) -> str:
     path = os.path.abspath(os.path.expanduser(path))
     os.makedirs(path, exist_ok=True)
@@ -254,6 +390,11 @@ def _generate_xemu_toml(
         msg = f"Invalid memory configuration: {memory}. Must be an integer > 0."
         raise ValueError(msg)
 
+    bootrom_path = os.path.abspath(os.path.expanduser(bootrom_path)).replace("\\", "/") if bootrom_path else ""
+    flashrom_path = os.path.abspath(os.path.expanduser(flashrom_path)).replace("\\", "/") if flashrom_path else ""
+    eeprom_path = os.path.abspath(os.path.expanduser(eeprom_path)).replace("\\", "/") if eeprom_path else ""
+    hdd_path = os.path.abspath(os.path.expanduser(hdd_path)).replace("\\", "/") if hdd_path else ""
+
     content = [
         "[general]",
         "show_welcome = false",
@@ -279,21 +420,89 @@ def _generate_xemu_toml(
         content.extend(["", "[display]", "renderer = 'VULKAN'"])
 
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w") as outfile:
+    with open(file_path, "w", encoding="utf-8") as outfile:
         outfile.write("\n".join(content))
+
+
+def _build_macos_xemu_binary_paths(xemu_path: str) -> tuple[str, str]:
+    """Configures DYLD_FALLBACK_LIBRARY_PATH and returns (xemu_binary, resources_path) for macOS."""
+    contents_path = None
+    config_path = os.path.dirname(xemu_path)
+
+    if xemu_path.endswith(".app") and os.path.isdir(xemu_path):
+        contents_path = os.path.join(xemu_path, "Contents")
+        xemu_binary = os.path.join(contents_path, "MacOS", "xemu")
+        if os.path.isfile(xemu_binary):
+            os.chmod(xemu_binary, 0o700)
+            xemu_path = xemu_binary
+        config_path = os.path.join(contents_path, "Resources")
+    elif "Contents/MacOS" in xemu_path:
+        contents_path = os.path.dirname(os.path.dirname(xemu_path))
+        config_path = os.path.join(contents_path, "Resources")
+    else:
+        # Check nearby dist/xemu.app or xemu.app
+        candidates = [
+            os.path.join(os.path.dirname(xemu_path), "..", "dist", "xemu.app", "Contents"),
+            os.path.join(os.path.dirname(xemu_path), "xemu.app", "Contents"),
+            os.path.join(os.path.dirname(xemu_path), "dist", "xemu.app", "Contents"),
+        ]
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                contents_path = candidate
+                break
+
+    if contents_path and os.path.isdir(contents_path):
+        library_path = os.path.join(contents_path, "Libraries", platform.uname().machine)
+        if os.path.isdir(library_path):
+            existing = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+            if library_path not in existing.split(":"):
+                os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = f"{library_path}:{existing}" if existing else library_path
+                logger.debug("Set DYLD_FALLBACK_LIBRARY_PATH to %s", os.environ["DYLD_FALLBACK_LIBRARY_PATH"])
+
+    if "DYLD_FALLBACK_LIBRARY_PATH" not in os.environ or not os.environ["DYLD_FALLBACK_LIBRARY_PATH"]:
+        arch = platform.uname().machine
+        for cache_candidate in [
+            "cache",
+            os.path.join(os.path.dirname(xemu_path), "cache"),
+            os.path.join(os.getcwd(), "cache"),
+        ]:
+            if os.path.isdir(cache_candidate):
+                for root, _, _ in os.walk(cache_candidate):
+                    if root.endswith(os.path.join("Contents", "Libraries", arch)):
+                        existing = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+                        if root not in existing.split(":"):
+                            os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = f"{root}:{existing}" if existing else root
+                            logger.debug("Added cache fallback DYLD_FALLBACK_LIBRARY_PATH: %s", root)
+                        break
+
+    return xemu_path, config_path
 
 
 def _build_emulator_command(
     xemu_path: str,
     *,
-    no_bundle: bool = False,  # noqa: ARG001
+    no_bundle: bool = False,
     custom_toml_path: str | None = None,
     enable_serial: bool = False,
     snapshot: bool = False,
 ) -> tuple[str, str]:
     portable_mode_config_path = os.path.dirname(xemu_path)
 
-    cmd = xemu_path + " -dvd_path {ISO}"
+    system = platform.system()
+    if system == "Darwin":
+        if not no_bundle:
+            xemu_path, portable_mode_config_path = _build_macos_xemu_binary_paths(xemu_path)
+    elif system == "Linux":
+        if xemu_path.endswith("AppImage"):
+            # AppImages need to have the xemu.toml file within their home dir.
+            portable_mode_config_path = os.path.join(f"{xemu_path}.home", ".local", "share", "xemu", "xemu")
+    elif system == "Windows":
+        pass
+    else:
+        msg = f"Platform {system} not supported."
+        raise NotImplementedError(msg)
+
+    cmd = f'"{xemu_path}" -dvd_path {{ISO}}'
     if snapshot:
         cmd += " -snapshot"
     if enable_serial:
@@ -313,14 +522,14 @@ def _determine_output_directory(results_path: str, emulator_command: str, *, is_
     )
     stderr = ""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=1)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=1, env=os.environ)
         stderr = result.stderr or ""
     except subprocess.TimeoutExpired as err:
         stderr = err.stderr.decode() if isinstance(err.stderr, bytes) else (err.stderr or "")
         sleep(0.5)
     except subprocess.CalledProcessError as err:
         stderr = err.stderr.decode() if isinstance(err.stderr, bytes) else (err.stderr or "")
-        logger.exception(stderr)
+        logger.exception("Failed to run emulator command to determine output directory: %s", stderr)
         raise
 
     emulator_output = EmulatorOutput.parse(stdout=[], stderr=stderr.split("\n"))
@@ -333,9 +542,33 @@ def _get_macos_bundle_identifier(xemu_path: str, *, no_bundle: bool) -> str | No
     if no_bundle or platform.system() != "Darwin":
         return None
 
-    command = ["mdls", "-name", "kMDItemCFBundleIdentifier", "-r", xemu_path]
-    result = subprocess.run(command, capture_output=True, text=True, check=True)
-    return result.stdout
+    app_path = None
+    if xemu_path.endswith(".app") and os.path.isdir(xemu_path):
+        app_path = xemu_path
+    elif "Contents/MacOS" in xemu_path:
+        app_path = os.path.dirname(os.path.dirname(os.path.dirname(xemu_path)))
+    else:
+        candidates = [
+            os.path.join(os.path.dirname(xemu_path), "..", "dist", "xemu.app"),
+            os.path.join(os.path.dirname(xemu_path), "xemu.app"),
+            os.path.join(os.path.dirname(xemu_path), "dist", "xemu.app"),
+        ]
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                app_path = candidate
+                break
+
+    if not app_path or not os.path.exists(app_path):
+        return None
+
+    try:
+        command = ["mdls", "-name", "kMDItemCFBundleIdentifier", "-r", app_path]
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+    except (CalledProcessError, OSError):
+        return None
+    else:
+        bundle_id = result.stdout.strip()
+        return bundle_id if bundle_id and bundle_id != "(null)" else None
 
 
 def _set_apple_persistence_ignore_state(macos_bundle_identifier: str, *, ignore: bool | None) -> bool | None:
@@ -349,17 +582,25 @@ def _set_apple_persistence_ignore_state(macos_bundle_identifier: str, *, ignore:
     current_value = None
     with contextlib.suppress(CalledProcessError):
         result = subprocess.run(command, capture_output=True, text=True, check=True)
-        current_value = result.stdout.startswith("1")
+        current_value = result.stdout.strip().startswith("1")
 
     if current_value != ignore:
-        command = [
-            "defaults",
-            "write",
-            macos_bundle_identifier,
-            "ApplePersistenceIgnoreState",
-            "-bool",
-            "true" if ignore else "false",
-        ]
+        if ignore is None:
+            command = [
+                "defaults",
+                "delete",
+                macos_bundle_identifier,
+                "ApplePersistenceIgnoreState",
+            ]
+        else:
+            command = [
+                "defaults",
+                "write",
+                macos_bundle_identifier,
+                "ApplePersistenceIgnoreState",
+                "-bool",
+                "true" if ignore else "false",
+            ]
         with contextlib.suppress(CalledProcessError):
             subprocess.run(command, capture_output=True, text=True, check=True)
 
@@ -696,6 +937,11 @@ def _process_arguments_and_run() -> int:
         help="Release tag to use when downloading ISO.",
     )
     parser.add_argument("--xemu", "-X", help="Path to the xemu executable.")
+    parser.add_argument(
+        "--xemu-tag",
+        default="latest",
+        help="Release tag to use when downloading xemu from GitHub.",
+    )
     parser.add_argument("--hdd", "-H", help="Path to xemu hard disk image to use.")
     parser.add_argument(
         "--bios",
@@ -727,11 +973,16 @@ def _process_arguments_and_run() -> int:
     parser.add_argument("--temp-path", help="Temporary path used during execution of tests")
     parser.add_argument("--results-path", "-R", default="results", help="Path to store results.")
     parser.add_argument("--overwrite-existing-outputs", "-f", action="store_true")
-    parser.add_argument("--no-bundle", action="store_true")
+    parser.add_argument(
+        "--no-bundle",
+        action="store_true",
+        help="Suppress attempt to set DYLD_FALLBACK_LIBRARY_PATH on macOS.",
+    )
     parser.add_argument("--use-vulkan", action="store_true")
     parser.add_argument("--just-suites", nargs="+")
     parser.add_argument(
         "--toml",
+        "--import-install",
         "-T",
         help="Import bios and mcpx from an existing xemu install",
         metavar="xemu_toml_path",
@@ -793,36 +1044,49 @@ def _process_arguments_and_run() -> int:
     cache_path = _ensure_cache_path(args.cache_path)
     results_path = _ensure_results_path(args.results_path)
 
-    if not args.xemu:
-        logger.error("xemu binary path must be specified")
+    xemu = os.path.abspath(os.path.expanduser(args.xemu)) if args.xemu else _download_xemu(cache_path, args.xemu_tag)
+    if not xemu:
+        logger.error("Failed to download or locate xemu")
         return 1
-
-    xemu = os.path.abspath(os.path.expanduser(args.xemu))
     if not os.path.exists(xemu):
         logger.error("Invalid xemu path '%s'", xemu)
         return 1
 
     if not args.overwrite_existing_outputs and not args.just_suites:
         try:
-            emulator_command, _ = _build_emulator_command(
-                xemu, no_bundle=args.no_bundle, enable_serial=args.enable_serial
-            )
-            if emulator_command:
-                output_directory = _determine_output_directory(
-                    results_path,
-                    emulator_command=emulator_command,
-                    is_vulkan=args.use_vulkan,
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_toml = os.path.join(temp_dir, "xemu.toml")
+                _generate_xemu_toml(
+                    temp_toml,
+                    bootrom_path=args.mcpx if args.mcpx else "",
+                    flashrom_path=args.bios if args.bios else "",
+                    eeprom_path=args.eeprom if args.eeprom else "",
+                    hdd_path=args.hdd if args.hdd else os.path.join(temp_dir, "hdd.img"),
+                    memory=args.memory,
+                    use_vulkan=args.use_vulkan,
                 )
+                emulator_command, _ = _build_emulator_command(
+                    xemu,
+                    no_bundle=args.no_bundle,
+                    enable_serial=args.enable_serial,
+                    custom_toml_path=temp_toml,
+                )
+                if emulator_command:
+                    output_directory = _determine_output_directory(
+                        results_path,
+                        emulator_command=emulator_command,
+                        is_vulkan=args.use_vulkan,
+                    )
 
-                if output_directory:
-                    existing_summaries = glob.glob(os.path.join(output_directory, "*", "summary.json"))
-                    if existing_summaries:
-                        logger.warning(
-                            "Found %d existing summary.json files in %s. Skipping execution. Use --overwrite-existing-outputs to force run.",
-                            len(existing_summaries),
-                            output_directory,
-                        )
-                        return 0
+                    if output_directory:
+                        existing_summaries = glob.glob(os.path.join(output_directory, "*", "summary.json"))
+                        if existing_summaries:
+                            logger.warning(
+                                "Found %d existing summary.json files in %s. Skipping execution. Use --overwrite-existing-outputs to force run.",
+                                len(existing_summaries),
+                                output_directory,
+                            )
+                            return 0
         except Exception:
             logger.exception("Failed to check for existing results, assuming none exist")
 

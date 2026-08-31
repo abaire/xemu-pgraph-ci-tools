@@ -50,9 +50,14 @@ Source = "https://github.com/abaire/xemu-pgraph-ci-tools"
 [tool.hatch.version]
 path = "src/xemu_pgraph_ci_tools/__about__.py"
 
+[tool.hatch.envs.hatch-static-analysis]
+dependencies = [
+  "ruff==0.15.17",
+]
+
 [tool.hatch.envs.types]
 extra-dependencies = [
-  "mypy>=1.0.0",
+  "mypy==1.15.0",
   "pytest",
   "types-requests",
 ]
