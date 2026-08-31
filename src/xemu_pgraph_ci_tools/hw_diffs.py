@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
-import shlex
-import subprocess
 import sys
-import tempfile
 
 from xemu_pgraph_ci_tools.comparator import (
     _ensure_cache_path,
     _fetch_hw_goldens,
-    perform_comparison,
+    discover_diff_tasks,
+    get_shard_slice,
+    process_diff_tasks,
+    reduce_comparison_summaries,
+)
+from xemu_pgraph_ci_tools.models import (
+    ComparisonSummary,
+    DiffTask,
+    ResultsInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,103 +105,121 @@ def _discover_test_suites(result_dir: str) -> list[str]:
     return sorted(suites)
 
 
+def identify_missing_hw_diffs(
+    results_dir: str,
+    output_dir: str,
+    golden_dir: str | None = None,
+    cache_path: str = "cache",
+    include_suites: set[str] | None = None,
+) -> list[DiffTask]:
+    """Identifies all missing hardware diff tasks at the test-case level."""
+    if not golden_dir:
+        cache_path = _ensure_cache_path(cache_path)
+        hw_golden_root = os.path.join(cache_path, "nxdk_pgraph_tests_golden_results")
+        if not os.path.isdir(hw_golden_root):
+            _fetch_hw_goldens(hw_golden_root)
+        resolved_golden_dir = (
+            os.path.join(hw_golden_root, "results")
+            if os.path.isdir(os.path.join(hw_golden_root, "results"))
+            else hw_golden_root
+        )
+    elif os.path.isdir(os.path.join(golden_dir, "results")):
+        resolved_golden_dir = os.path.join(golden_dir, "results")
+    else:
+        resolved_golden_dir = golden_dir
+
+    result_paths = _find_results_paths(results_dir)
+    all_tasks: list[DiffTask] = []
+
+    for run_dir in sorted(result_paths):
+        results_info = ResultsInfo.parse(run_dir, include_suites)
+        comparison_output_dir = os.path.join(
+            output_dir,
+            results_info.output_subdirectory,
+            "Xbox__Xbox__DirectX__nv2a",
+        )
+
+        existing_summary = None
+        summary_path = os.path.join(comparison_output_dir, "summary.json")
+        if os.path.isfile(summary_path):
+            try:
+                existing_summary = ComparisonSummary.load_from_file(summary_path)
+            except (json.JSONDecodeError, OSError, TypeError, KeyError):
+                logger.warning("Could not load summary from %s", summary_path)
+
+        def get_output_path(suite: str, test_case: str, _src: str, c_dir: str = comparison_output_dir) -> str:
+            return os.path.join(c_dir, suite, f"{test_case}-diff.png")
+
+        def get_golden_path(suite: str, test_case: str, _src: str, g_dir: str = resolved_golden_dir) -> str:
+            return os.path.join(g_dir, suite, f"{test_case}.png")
+
+        run_tasks = discover_diff_tasks(
+            run_dir,
+            get_output_path_fn=get_output_path,
+            get_golden_path_fn=get_golden_path,
+            include_suites=include_suites,
+            results_path=run_dir,
+            results_identifier=results_info.run_identifier,
+            golden_identifier="Xbox_Hardware",
+            comparison_output_dir=comparison_output_dir,
+            skip_existing=False,
+        )
+
+        for task in run_tasks:
+            fq_name = task.fully_qualified_test_name
+            if existing_summary:
+                if fq_name in existing_summary.tests_evaluated:
+                    continue
+                if fq_name in existing_summary.tests_with_differences and os.path.isfile(task.output_diff_image):
+                    continue
+                if fq_name in existing_summary.tests_without_goldens and not os.path.isfile(task.golden_image):
+                    continue
+
+            if os.path.isfile(task.output_diff_image):
+                continue
+
+            all_tasks.append(task)
+
+    logger.info("Identified %d missing HW diff task(s)", len(all_tasks))
+    return all_tasks
+
+
 def generate_missing_hw_diffs(
     results_dir: str,
     output_dir: str,
-    compare_script: str | None = None,
+    compare_script: str | None = None,  # noqa: ARG001
     golden_dir: str | None = None,
     cache_path: str = "cache",
     perceptualdiff: str = "perceptualdiff",
     shard_index: int | None = None,
     shard_count: int | None = None,
 ) -> None:
-    results_missing_comparisons = find_result_dirs_without_hw_diffs(results_dir, output_dir)
-
-    if not results_missing_comparisons:
-        logger.warning("No result directories need HW comparisons. Nothing to do.")
-        return
-
-    if not golden_dir:
-        cache_path = _ensure_cache_path(cache_path)
-        hw_golden_root = os.path.join(cache_path, "nxdk_pgraph_tests_golden_results")
-        if not os.path.isdir(hw_golden_root):
-            _fetch_hw_goldens(hw_golden_root)
-        golden_dir = (
-            os.path.join(hw_golden_root, "results")
-            if os.path.isdir(os.path.join(hw_golden_root, "results"))
-            else hw_golden_root
-        )
-    elif os.path.isdir(os.path.join(golden_dir, "results")):
-        golden_dir = os.path.join(golden_dir, "results")
-
-    flat_items: list[tuple[str, str]] = []
-    for result_dir in sorted(results_missing_comparisons):
-        suites = _discover_test_suites(result_dir)
-        logger.info("Found %d test suite(s) in %s", len(suites), result_dir)
-        flat_items.extend((result_dir, suite) for suite in suites)
-
-    logger.info(
-        "Total (result_dir, suite) pairs to process (before sharding): %d",
-        len(flat_items),
+    tasks = identify_missing_hw_diffs(
+        results_dir=results_dir,
+        output_dir=output_dir,
+        golden_dir=golden_dir,
+        cache_path=cache_path,
     )
-    if not flat_items:
-        logger.warning("No test suites found. Nothing to do.")
+
+    if not tasks:
+        logger.warning("No missing HW diff tasks found. Nothing to do.")
         return
 
     if shard_index is not None and shard_count is not None:
         logger.info("Sharding: index=%d, count=%d", shard_index, shard_count)
-        flat_items = [item for i, item in enumerate(flat_items) if i % shard_count == shard_index]
-        logger.info("This shard will process %d pair(s)", len(flat_items))
-        if not flat_items:
+        tasks = get_shard_slice(tasks, shard_index, shard_count)
+        logger.info("This shard will process %d task(s)", len(tasks))
+        if not tasks:
             logger.warning("Shard %d has no work to process.", shard_index)
             return
 
-    suites_by_result_dir: dict[str, list[str]] = {}
-    for result_dir, suite in flat_items:
-        suites_by_result_dir.setdefault(result_dir, []).append(suite)
-
-    for result_dir, suites in sorted(suites_by_result_dir.items()):
-        sorted_suites = sorted(suites)
-        logger.info(
-            "Running comparison for %s with %d suite(s): %s",
-            result_dir,
-            len(suites),
-            ", ".join(sorted_suites),
-        )
-
-        if compare_script:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-                f.write("\n".join(sorted_suites))
-                suites_file = f.name
-            try:
-                cmd = shlex.split(compare_script) if isinstance(compare_script, str) else list(compare_script)
-                cmd.extend(
-                    [
-                        result_dir,
-                        "--against",
-                        golden_dir,
-                        "--output-dir",
-                        output_dir,
-                        "--perceptualdiff",
-                        perceptualdiff,
-                        "--verbose",
-                        "--include-suites-file",
-                        suites_file,
-                    ]
-                )
-                subprocess.run(cmd, check=False)
-            finally:
-                os.unlink(suites_file)
-        else:
-            perform_comparison(
-                results_path=result_dir,
-                golden_path=golden_dir,
-                output_dir=output_dir,
-                perceptualdiff=perceptualdiff,
-                diff_threshold=0.00001,
-                use_lpips=False,
-                include_suites=set(sorted_suites),
-            )
+    shard_id = f"shard_{shard_index}" if shard_index is not None else None
+    process_diff_tasks(
+        tasks,
+        output_dir=output_dir,
+        perceptualdiff=perceptualdiff,
+        shard_id=shard_id,
+    )
 
 
 def main() -> int:
@@ -211,9 +235,32 @@ def main() -> int:
     )
     parser.add_argument("--shard-index", type=int, default=None, help="Shard index (0-based)")
     parser.add_argument("--shard-count", type=int, default=None, help="Total number of shards")
+    parser.add_argument(
+        "--identify-only",
+        action="store_true",
+        help="Only identify missing diff tasks and output JSON summary",
+    )
+    parser.add_argument(
+        "--reduce-summaries",
+        action="store_true",
+        help="Merge all partial summary.*.json files into final summary.json in output-dir",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    if args.reduce_summaries:
+        reduce_comparison_summaries(args.output_dir)
+        return 0
+
+    if args.identify_only:
+        tasks = identify_missing_hw_diffs(
+            args.results_dir,
+            args.output_dir,
+            golden_dir=args.golden_dir,
+        )
+        [t.to_dict() for t in tasks]
+        return 0
 
     if (args.shard_index is None) != (args.shard_count is None):
         parser.error("--shard-index and --shard-count must be used together")

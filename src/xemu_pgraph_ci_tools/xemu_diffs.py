@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004
+# ruff: noqa: T201, PLR2004
 
 from __future__ import annotations
 
@@ -6,13 +6,21 @@ import argparse
 import json
 import logging
 import os
-import shlex
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 
-from xemu_pgraph_ci_tools.comparator import perform_comparison
+from xemu_pgraph_ci_tools.comparator import (
+    discover_diff_tasks,
+    get_shard_slice,
+    process_diff_tasks,
+    reduce_comparison_summaries,
+)
+from xemu_pgraph_ci_tools.models import (
+    ComparisonSummary,
+    DiffTask,
+    ResultsInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,14 +116,13 @@ def _build_configurations(base_dir: str) -> dict[str, ResultsConfiguration]:
     return {path: ResultsConfiguration(path) for path in paths}
 
 
-def generate_diffs(
+def identify_missing_xemu_diffs(
     results_dir: str,
     golden_dir: str,
-    compare_script: str | None = None,
-    cache_dir: str = "cache",
     output_dir: str = "compare-results",
-    perceptualdiff: str = "perceptualdiff",
-) -> dict[str, str]:
+    include_suites: set[str] | None = None,
+) -> tuple[dict[str, str], list[DiffTask]]:
+    """Identifies missing diff tasks between test runs and baseline xemu runs."""
     result_paths = _find_results_paths(results_dir)
     golden_configurations = _build_configurations(golden_dir)
 
@@ -123,8 +130,10 @@ def generate_diffs(
         msg = f"No baseline results found in {golden_dir}"
         raise ValueError(msg)
 
-    registry = {}
-    for path in result_paths:
+    registry: dict[str, str] = {}
+    all_tasks: list[DiffTask] = []
+
+    for path in sorted(result_paths):
         results_config = ResultsConfiguration(path)
         best_match = _find_best_comparator(results_config, golden_configurations)
         if not best_match:
@@ -132,40 +141,106 @@ def generate_diffs(
         golden_path, _ = best_match
         registry[path] = golden_path
 
-        if compare_script:
-            cmd = shlex.split(compare_script) if isinstance(compare_script, str) else list(compare_script)
-            cmd.extend(
-                [
-                    path,
-                    "--against",
-                    golden_path,
-                    "--output-dir",
-                    output_dir,
-                    "--cache-path",
-                    cache_dir,
-                    "--perceptualdiff",
-                    perceptualdiff,
-                    "--verbose",
-                ]
-            )
-            subprocess.run(cmd, check=False)
-        else:
-            perform_comparison(
-                results_path=path,
-                golden_path=golden_path,
-                output_dir=output_dir,
-                perceptualdiff=perceptualdiff,
-                diff_threshold=0.00001,
-                use_lpips=False,
-            )
+        results_info = ResultsInfo.parse(path, include_suites)
+        golden_info = ResultsInfo.parse(golden_path, include_suites)
+
+        comparison_output_dir = os.path.join(
+            output_dir,
+            results_info.output_subdirectory,
+            golden_info.run_identifier_subdirectory,
+        )
+
+        existing_summary = None
+        summary_path = os.path.join(comparison_output_dir, "summary.json")
+        if os.path.isfile(summary_path):
+            try:
+                existing_summary = ComparisonSummary.load_from_file(summary_path)
+            except (json.JSONDecodeError, OSError, TypeError, KeyError):
+                logger.warning("Could not load summary from %s", summary_path)
+
+        def get_output_path(suite: str, test_case: str, _src: str, c_dir: str = comparison_output_dir) -> str:
+            return os.path.join(c_dir, suite, f"{test_case}-diff.png")
+
+        def get_golden_path(suite: str, test_case: str, _src: str, g_dir: str = golden_path) -> str:
+            return os.path.join(g_dir, suite, f"{test_case}.png")
+
+        run_tasks = discover_diff_tasks(
+            path,
+            get_output_path_fn=get_output_path,
+            get_golden_path_fn=get_golden_path,
+            include_suites=include_suites,
+            results_path=path,
+            results_identifier=results_info.run_identifier,
+            golden_identifier=golden_info.run_identifier,
+            comparison_output_dir=comparison_output_dir,
+            skip_existing=False,
+        )
+
+        for task in run_tasks:
+            fq_name = task.fully_qualified_test_name
+            if existing_summary:
+                if fq_name in existing_summary.tests_evaluated:
+                    continue
+                if fq_name in existing_summary.tests_with_differences and os.path.isfile(task.output_diff_image):
+                    continue
+                if fq_name in existing_summary.tests_without_goldens and not os.path.isfile(task.golden_image):
+                    continue
+
+            if os.path.isfile(task.output_diff_image):
+                continue
+
+            all_tasks.append(task)
+
+    logger.info("Identified %d missing Xemu diff task(s) across %d run(s)", len(all_tasks), len(registry))
+    return registry, all_tasks
+
+
+def generate_diffs(
+    results_dir: str,
+    golden_dir: str,
+    compare_script: str | None = None,  # noqa: ARG001
+    cache_dir: str = "cache",  # noqa: ARG001
+    output_dir: str = "compare-results",
+    perceptualdiff: str = "perceptualdiff",
+    shard_index: int | None = None,
+    shard_count: int | None = None,
+) -> dict[str, str]:
+    registry, tasks = identify_missing_xemu_diffs(
+        results_dir=results_dir,
+        golden_dir=golden_dir,
+        output_dir=output_dir,
+    )
 
     os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, "comparisons.json"), "w", encoding="utf-8") as outfile:
+    comparisons_path = os.path.join(output_dir, "comparisons.json")
+    with open(comparisons_path, "w", encoding="utf-8") as outfile:
         json.dump(registry, outfile, indent=2)
 
     known_issues_file = os.path.join(golden_dir, "results", "known_issues.json")
+    if not os.path.isfile(known_issues_file):
+        known_issues_file = os.path.join(golden_dir, "known_issues.json")
     if os.path.isfile(known_issues_file):
         shutil.copy(known_issues_file, os.path.join(output_dir, "known_issues.json"))
+
+    if not tasks:
+        logger.warning("No missing Xemu diff tasks found. Nothing to do.")
+        return registry
+
+    if shard_index is not None and shard_count is not None:
+        logger.info("Sharding: index=%d, count=%d", shard_index, shard_count)
+        tasks = get_shard_slice(tasks, shard_index, shard_count)
+        logger.info("This shard will process %d task(s)", len(tasks))
+        if not tasks:
+            logger.warning("Shard %d has no work to process.", shard_index)
+            return registry
+
+    shard_id = f"shard_{shard_index}" if shard_index is not None else None
+    process_diff_tasks(
+        tasks,
+        output_dir=output_dir,
+        perceptualdiff=perceptualdiff,
+        shard_id=shard_id,
+    )
 
     return registry
 
@@ -175,17 +250,49 @@ def main() -> int:
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--output-dir", default="compare-results")
     parser.add_argument("--compare-script", default=None)
-    parser.add_argument("--baseline-dir", required=True, help="Path to baseline directory")
+    parser.add_argument("--baseline-dir", required=False, help="Path to baseline directory")
     parser.add_argument("--cache-dir", default="cache")
     parser.add_argument("--perceptualdiff", default="perceptualdiff")
+    parser.add_argument("--shard-index", type=int, default=None, help="Shard index (0-based)")
+    parser.add_argument("--shard-count", type=int, default=None, help="Total number of shards")
+    parser.add_argument(
+        "--identify-only",
+        action="store_true",
+        help="Only identify missing diff tasks and output JSON summary",
+    )
+    parser.add_argument(
+        "--reduce-summaries",
+        action="store_true",
+        help="Merge all partial summary.*.json files into final summary.json in output-dir",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+
+    if args.reduce_summaries:
+        reduce_comparison_summaries(args.output_dir)
+        return 0
+
+    if not args.baseline_dir:
+        parser.error("--baseline-dir is required unless --reduce-summaries is specified")
 
     golden_dir = os.path.abspath(os.path.expanduser(args.baseline_dir))
     if not os.path.isdir(golden_dir):
         logger.error("Baseline directory %s not found.", golden_dir)
         return 1
+
+    if args.identify_only:
+        _registry, tasks = identify_missing_xemu_diffs(
+            args.results_dir,
+            golden_dir,
+            output_dir=args.output_dir,
+        )
+        task_dicts = [t.to_dict() for t in tasks]
+        print(json.dumps(task_dicts, indent=2))
+        return 0
+
+    if (args.shard_index is None) != (args.shard_count is None):
+        parser.error("--shard-index and --shard-count must be used together")
 
     generate_diffs(
         args.results_dir,
@@ -194,6 +301,8 @@ def main() -> int:
         cache_dir=args.cache_dir,
         output_dir=args.output_dir,
         perceptualdiff=args.perceptualdiff,
+        shard_index=args.shard_index,
+        shard_count=args.shard_count,
     )
     return 0
 

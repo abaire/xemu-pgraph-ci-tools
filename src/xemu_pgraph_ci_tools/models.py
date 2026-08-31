@@ -180,6 +180,76 @@ class Difference:
 
 
 @dataclass
+class DiffTask:
+    """A task representing an individual test diff between a source image and a golden reference image."""
+
+    suite: str
+    test_case: str
+    source_image: str
+    golden_image: str
+    output_diff_image: str
+    results_path: str = ""
+    results_identifier: str = ""
+    golden_identifier: str = ""
+    comparison_output_dir: str = ""
+
+    @property
+    def fully_qualified_test_name(self) -> str:
+        return f"{self.suite}:{self.test_case}"
+
+    def generate_difference_image(self, perceptualdiff: str) -> tuple[int, str, str]:
+        """Generates a diff image at output_diff_image using perceptualdiff.
+
+        Returns tuple[ExitCode, STDOUT, STDERR]
+        """
+        target_dir = os.path.dirname(self.output_diff_image)
+        os.makedirs(target_dir, exist_ok=True)
+        result = subprocess.run(
+            [
+                perceptualdiff,
+                "-output",
+                self.output_diff_image,
+                self.source_image,
+                self.golden_image,
+            ],
+            check=False,
+            capture_output=True,
+        )
+        return (
+            result.returncode,
+            result.stdout.decode("utf-8", errors="replace"),
+            result.stderr.decode("utf-8", errors="replace"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "suite": self.suite,
+            "test_case": self.test_case,
+            "source_image": self.source_image,
+            "golden_image": self.golden_image,
+            "output_diff_image": self.output_diff_image,
+            "results_path": self.results_path,
+            "results_identifier": self.results_identifier,
+            "golden_identifier": self.golden_identifier,
+            "comparison_output_dir": self.comparison_output_dir,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DiffTask:
+        return cls(
+            suite=data["suite"],
+            test_case=data["test_case"],
+            source_image=data["source_image"],
+            golden_image=data["golden_image"],
+            output_diff_image=data["output_diff_image"],
+            results_path=data.get("results_path", ""),
+            results_identifier=data.get("results_identifier", ""),
+            golden_identifier=data.get("golden_identifier", ""),
+            comparison_output_dir=data.get("comparison_output_dir", ""),
+        )
+
+
+@dataclass
 class ComparisonSummary:
     """Summary of a comparison between a test run and a golden reference set."""
 
@@ -188,6 +258,20 @@ class ComparisonSummary:
     tests_without_goldens: list[str] = field(default_factory=list)
     goldens_without_results: list[str] = field(default_factory=list)
     tests_with_differences: dict[str, float] = field(default_factory=dict)
+    tests_evaluated: list[str] = field(default_factory=list)
+
+    def merge(self, other: ComparisonSummary) -> ComparisonSummary:
+        """Merges another ComparisonSummary into this one."""
+        if other.result_identifier and not self.result_identifier:
+            self.result_identifier = other.result_identifier
+        if other.golden_identifier and not self.golden_identifier:
+            self.golden_identifier = other.golden_identifier
+
+        self.tests_with_differences.update(other.tests_with_differences)
+        self.tests_without_goldens = sorted(set(self.tests_without_goldens) | set(other.tests_without_goldens))
+        self.goldens_without_results = sorted(set(self.goldens_without_results) | set(other.goldens_without_results))
+        self.tests_evaluated = sorted(set(self.tests_evaluated) | set(other.tests_evaluated))
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +280,7 @@ class ComparisonSummary:
             "tests_without_goldens": sorted(self.tests_without_goldens),
             "goldens_without_results": sorted(self.goldens_without_results),
             "tests_with_differences": self.tests_with_differences,
+            "tests_evaluated": sorted(self.tests_evaluated),
         }
 
     def save_to_file(self, path: str) -> None:
@@ -213,6 +298,7 @@ class ComparisonSummary:
             tests_without_goldens=data.get("tests_without_goldens", []),
             goldens_without_results=data.get("goldens_without_results", []),
             tests_with_differences=data.get("tests_with_differences", {}),
+            tests_evaluated=data.get("tests_evaluated", []),
         )
 
 

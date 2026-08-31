@@ -3,12 +3,19 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from xemu_pgraph_ci_tools.comparator import reduce_comparison_summaries
 from xemu_pgraph_ci_tools.hw_diffs import (
     _comparison_path_to_source_path,
     find_result_dirs_without_hw_diffs,
 )
-from xemu_pgraph_ci_tools.xemu_diffs import ResultsConfiguration, _find_best_comparator
+from xemu_pgraph_ci_tools.xemu_diffs import (
+    ResultsConfiguration,
+    _find_best_comparator,
+    generate_diffs,
+    identify_missing_xemu_diffs,
+)
 
 
 class TestDiffs(unittest.TestCase):
@@ -66,6 +73,75 @@ class TestDiffs(unittest.TestCase):
             best = _find_best_comparator(config1, golden_configs)
             assert best is not None
             assert best[0] == golden1_path
+
+    def test_identify_missing_xemu_diffs_and_sharding(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_dir = os.path.join(tmpdir, "results", "0.8.0", "Linux_x86_64", "4.6", "4.60")
+            os.makedirs(os.path.join(res_dir, "Suite1"))
+            with open(os.path.join(res_dir, "results.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(res_dir, "machine_info.txt"), "w") as f:
+                f.write("GL_VENDOR: NVIDIA\nGL_VERSION: 4.6.0\nGL_SHADING_LANGUAGE_VERSION: 4.60\n")
+            with open(os.path.join(res_dir, "Suite1", "test1.png"), "w") as f:
+                f.write("img1")
+            with open(os.path.join(res_dir, "Suite1", "test2.png"), "w") as f:
+                f.write("img2")
+
+            gold_dir = os.path.join(tmpdir, "baseline", "0.7.99", "Linux_x86_64", "4.6", "4.60")
+            os.makedirs(os.path.join(gold_dir, "Suite1"))
+            with open(os.path.join(gold_dir, "results.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(gold_dir, "machine_info.txt"), "w") as f:
+                f.write("GL_VENDOR: NVIDIA\nGL_VERSION: 4.6.0\nGL_SHADING_LANGUAGE_VERSION: 4.60\n")
+            with open(os.path.join(gold_dir, "Suite1", "test1.png"), "w") as f:
+                f.write("gold1")
+            with open(os.path.join(gold_dir, "Suite1", "test2.png"), "w") as f:
+                f.write("gold2")
+
+            out_dir = os.path.join(tmpdir, "compare-results")
+
+            # 1. Identify tasks
+            registry, tasks = identify_missing_xemu_diffs(
+                os.path.join(tmpdir, "results"),
+                os.path.join(tmpdir, "baseline"),
+                output_dir=out_dir,
+            )
+            assert len(registry) == 1
+            assert len(tasks) == 2
+
+            # 2. Run sharded diff generation
+            with patch("xemu_pgraph_ci_tools.models.DiffTask.generate_difference_image") as mock_diff:
+                mock_diff.return_value = (0, "5 pixels are different", "")
+                generate_diffs(
+                    os.path.join(tmpdir, "results"),
+                    os.path.join(tmpdir, "baseline"),
+                    output_dir=out_dir,
+                    shard_index=0,
+                    shard_count=2,
+                )
+                generate_diffs(
+                    os.path.join(tmpdir, "results"),
+                    os.path.join(tmpdir, "baseline"),
+                    output_dir=out_dir,
+                    shard_index=1,
+                    shard_count=2,
+                )
+
+            # 3. Reduce summaries
+            reduce_comparison_summaries(out_dir)
+
+            comp_dir = os.path.join(
+                out_dir,
+                "0.8.0",
+                "Linux_x86_64",
+                "4.6",
+                "4.60",
+                "0.7.99__Linux_x86_64__4.6__4.60",
+            )
+            unified_summary_file = os.path.join(comp_dir, "summary.json")
+            assert os.path.isfile(unified_summary_file)
+            assert not os.path.isfile(os.path.join(comp_dir, "summary.shard_0.json"))
+            assert not os.path.isfile(os.path.join(comp_dir, "summary.shard_1.json"))
 
 
 if __name__ == "__main__":

@@ -42,8 +42,8 @@ class TestPipeline(unittest.TestCase):
 
             output_dir = os.path.join(tmpdir, "output")
 
-            with patch("xemu_pgraph_ci_tools.comparator._compare_perceptualdiff") as mock_comp:
-                mock_comp.return_value = (set(), set(), [])
+            with patch("xemu_pgraph_ci_tools.models.DiffTask.generate_difference_image") as mock_comp:
+                mock_comp.return_value = (0, "0 pixels are different", "")
 
                 report = run_pipeline(
                     results_dir=os.path.join(tmpdir, "results"),
