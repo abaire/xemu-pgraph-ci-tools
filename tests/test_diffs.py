@@ -31,7 +31,9 @@ class TestDiffs(unittest.TestCase):
             assert run1 in missing
 
             # Now simulate existing comparison
-            comp_dir = os.path.join(output_root, "v1", "Linux", "4.6", "4.60", "Xbox__Xbox__DirectX__nv2a")
+            comp_dir = os.path.join(
+                output_root, "v1", "Linux", "4.6", "4.60", "Xbox__Xbox__DirectX__nv2a"
+            )
             os.makedirs(comp_dir)
             with open(os.path.join(comp_dir, "summary.json"), "w") as f:
                 f.write("{}")

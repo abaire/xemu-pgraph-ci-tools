@@ -1,3 +1,5 @@
+# ruff: noqa: T201, S310
+
 from __future__ import annotations
 
 import argparse
@@ -27,6 +29,9 @@ from nxdk_pgraph_test_runner import Config
 from nxdk_pgraph_test_runner.emulator_output import EmulatorOutput
 from nxdk_pgraph_test_runner.host_profile import HostProfile
 from nxdk_pgraph_test_runner.runner import get_output_directory
+
+from xemu_pgraph_ci_tools.models import TestResultsManifest
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 
 if TYPE_CHECKING:
     from collections.abc import Collection
@@ -143,7 +148,7 @@ def _download_artifact(
     if artifact_path_override:
         target_path = artifact_path_override
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    urlretrieve(download_url, target_path)  # noqa: S310
+    urlretrieve(download_url, target_path)
     urlcleanup()
     return True
 
@@ -908,7 +913,7 @@ def _merge_shard_results(shard_results_paths: list[str], final_results_path: str
 
 
 def _extract_info_from_xemu_toml(toml_path: str) -> tuple[str, str] | None:
-    toml_path = os.path.abspath(os.path.expanduser(toml_path))
+    toml_path = os.path.abspath(os.expanduser(toml_path))
     if os.path.isdir(toml_path):
         toml_path = os.path.join(toml_path, "xemu.toml")
     if not os.path.isfile(toml_path):
@@ -1011,8 +1016,18 @@ def _process_arguments_and_run() -> int:
         action="store_true",
         help="Run emulator in snapshot mode (discards HDD changes on exit).",
     )
+    parser.add_argument(
+        "--emit-schema",
+        "--schema",
+        action="store_true",
+        help="Emit JSON Schema for results.json output artifact and exit.",
+    )
 
     args = parser.parse_args()
+
+    if args.emit_schema:
+        print(emit_json_schema(TestResultsManifest))
+        return 0
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
@@ -1044,7 +1059,7 @@ def _process_arguments_and_run() -> int:
     cache_path = _ensure_cache_path(args.cache_path)
     results_path = _ensure_results_path(args.results_path)
 
-    xemu = os.path.abspath(os.path.expanduser(args.xemu)) if args.xemu else _download_xemu(cache_path, args.xemu_tag)
+    xemu = os.path.abspath(os.expanduser(args.xemu)) if args.xemu else _download_xemu(cache_path, args.xemu_tag)
     if not xemu:
         logger.error("Failed to download or locate xemu")
         return 1
@@ -1090,15 +1105,12 @@ def _process_arguments_and_run() -> int:
         except Exception:
             logger.exception("Failed to check for existing results, assuming none exist")
 
-    if args.iso:
-        iso = os.path.abspath(os.path.expanduser(args.iso))
-    else:
-        iso = _download_tester_iso(cache_path, args.pgraph_tag)
+    iso = os.path.abspath(os.expanduser(args.iso)) if args.iso else _download_tester_iso(cache_path, args.pgraph_tag)
     if not iso or not os.path.isfile(iso):
         logger.error("Invalid ISO path '%s'", iso)
         return 1
 
-    hdd = os.path.abspath(os.path.expanduser(args.hdd)) if args.hdd else _download_xemu_hdd(cache_path)
+    hdd = os.path.abspath(os.expanduser(args.hdd)) if args.hdd else _download_xemu_hdd(cache_path)
     if not hdd or not os.path.isfile(hdd):
         logger.error("Invalid xemu_hdd path")
         return 1
@@ -1204,11 +1216,26 @@ def merge_main() -> int:
         "--inputs",
         "-i",
         nargs="+",
-        required=True,
+        required=False,
         help="List of shard results directories.",
     )
-    parser.add_argument("--output-dir", "-o", required=True, help="Directory to store merged results.")
+    parser.add_argument("--output-dir", "-o", required=False, help="Directory to store merged results.")
+    parser.add_argument(
+        "--emit-schema",
+        "--schema",
+        action="store_true",
+        help="Emit JSON Schema for results.json output artifact and exit.",
+    )
+
     args = parser.parse_args()
+
+    if args.emit_schema:
+        print(emit_json_schema(TestResultsManifest))
+        return 0
+
+    if not args.inputs or not args.output_dir:
+        parser.error("the following arguments are required: --inputs, --output-dir")
+
     _merge_shard_results(args.inputs, args.output_dir)
     return 0
 

@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004
+# ruff: noqa: T201, PLR2004
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 
 from xemu_pgraph_ci_tools.comparator import perform_comparison
+from xemu_pgraph_ci_tools.models import ComparisonsMap
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,9 @@ class ResultsConfiguration:
     def __init__(self, results_path: str):
         machine_info_path = os.path.join(results_path, "machine_info.txt")
         if os.path.isfile(machine_info_path):
-            with open(machine_info_path, encoding="utf-8", errors="replace") as machine_info:
+            with open(
+                machine_info_path, encoding="utf-8", errors="replace"
+            ) as machine_info:
                 for full_line in machine_info:
                     line = full_line.strip()
                     if line.startswith("CPU:"):
@@ -82,7 +86,9 @@ class ResultsConfiguration:
         ret = 0
         if self.renderer == other.renderer:
             ret += 500000
-        ret += prefix_match(self.sanitized_os_arch, other.sanitized_os_arch, 100, 100000)
+        ret += prefix_match(
+            self.sanitized_os_arch, other.sanitized_os_arch, 100, 100000
+        )
         ret += prefix_match(self.glsl_version, other.glsl_version, 50, 500)
         ret += prefix_match(self.gl_version, other.gl_version, 50, 500)
         return ret
@@ -133,7 +139,11 @@ def generate_diffs(
         registry[path] = golden_path
 
         if compare_script:
-            cmd = shlex.split(compare_script) if isinstance(compare_script, str) else list(compare_script)
+            cmd = (
+                shlex.split(compare_script)
+                if isinstance(compare_script, str)
+                else list(compare_script)
+            )
             cmd.extend(
                 [
                     path,
@@ -160,7 +170,9 @@ def generate_diffs(
             )
 
     os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, "comparisons.json"), "w", encoding="utf-8") as outfile:
+    with open(
+        os.path.join(output_dir, "comparisons.json"), "w", encoding="utf-8"
+    ) as outfile:
         json.dump(registry, outfile, indent=2)
 
     known_issues_file = os.path.join(golden_dir, "results", "known_issues.json")
@@ -175,11 +187,27 @@ def main() -> int:
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--output-dir", default="compare-results")
     parser.add_argument("--compare-script", default=None)
-    parser.add_argument("--baseline-dir", required=True, help="Path to baseline directory")
+    parser.add_argument(
+        "--baseline-dir", required=False, help="Path to baseline directory"
+    )
     parser.add_argument("--cache-dir", default="cache")
     parser.add_argument("--perceptualdiff", default="perceptualdiff")
+    parser.add_argument(
+        "--emit-schema",
+        "--schema",
+        action="store_true",
+        help="Emit JSON Schema for output comparisons.json artifact and exit.",
+    )
 
     args = parser.parse_args()
+
+    if args.emit_schema:
+        print(emit_json_schema(ComparisonsMap))
+        return 0
+
+    if not args.baseline_dir:
+        parser.error("the following arguments are required: --baseline-dir")
+
     logging.basicConfig(level=logging.INFO)
 
     golden_dir = os.path.abspath(os.path.expanduser(args.baseline_dir))

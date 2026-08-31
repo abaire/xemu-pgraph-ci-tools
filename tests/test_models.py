@@ -25,8 +25,12 @@ class TestModels(unittest.TestCase):
         assert info.gl_version == "4.6_Core"
         assert info.glsl_version == "4.60"
         assert info.run_identifier == "v0.8.15:Linux_x86_64:4.6_Core:4.60"
-        assert info.output_subdirectory == os.path.join("v0.8.15", "Linux_x86_64", "4.6_Core", "4.60")
-        assert info.run_identifier_subdirectory == "v0.8.15__Linux_x86_64__4.6_Core__4.60"
+        assert info.output_subdirectory == os.path.join(
+            "v0.8.15", "Linux_x86_64", "4.6_Core", "4.60"
+        )
+        assert (
+            info.run_identifier_subdirectory == "v0.8.15__Linux_x86_64__4.6_Core__4.60"
+        )
 
     def test_results_info_find_images(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -39,7 +43,9 @@ class TestModels(unittest.TestCase):
             with open(diff_png, "w") as f:
                 f.write("fake diff")
 
-            info = ResultsInfo.parse(os.path.join(tmpdir, "v1", "Darwin", "4.1", "4.10"))
+            info = ResultsInfo.parse(
+                os.path.join(tmpdir, "v1", "Darwin", "4.1", "4.10")
+            )
             assert "suite1" in info.test_suites
             assert "test1" in info.test_suites["suite1"]
             assert "test1-diff" not in info.test_suites["suite1"]
@@ -71,11 +77,15 @@ class TestModels(unittest.TestCase):
         }
         registry = KnownIssuesRegistry(data)
 
-        darwin_issues = registry.get_known_issues("SuiteA", "Test1", "Darwin_arm64", "4.1", "4.10")
+        darwin_issues = registry.get_known_issues(
+            "SuiteA", "Test1", "Darwin_arm64", "4.1", "4.10"
+        )
         assert "Suite level bug on macOS" in darwin_issues
         assert "Test1 broken on all platforms" in darwin_issues
 
-        linux_issues = registry.get_known_issues("SuiteA", "Test1", "Linux_x86_64", "4.6", "4.60")
+        linux_issues = registry.get_known_issues(
+            "SuiteA", "Test1", "Linux_x86_64", "4.6", "4.60"
+        )
         assert "Suite level bug on macOS" not in linux_issues
         assert "Test1 broken on all platforms" in linux_issues
 

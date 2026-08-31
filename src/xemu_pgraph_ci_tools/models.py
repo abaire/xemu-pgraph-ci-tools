@@ -35,7 +35,15 @@ class ResultsInfo:
     xemu_version: str
     platform_info: str
     gl_info: str
-    test_suites: dict[str, dict[str, str]] = field(default_factory=lambda: defaultdict(dict))
+    test_suites: dict[str, dict[str, str]] = field(
+        default_factory=lambda: defaultdict(dict)
+    )
+
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
 
     @property
     def run_identifier(self) -> str:
@@ -43,7 +51,9 @@ class ResultsInfo:
 
     @property
     def output_subdirectory(self) -> str:
-        return os.path.join(self.xemu_version, self.platform_info, self.gl_info.replace(":", "/"))
+        return os.path.join(
+            self.xemu_version, self.platform_info, self.gl_info.replace(":", "/")
+        )
 
     @property
     def run_identifier_subdirectory(self) -> str:
@@ -91,11 +101,15 @@ class ResultsInfo:
             for filename in filenames:
                 if filename.endswith(".png") and not filename.endswith("-diff.png"):
                     test_case = os.path.splitext(filename)[0]
-                    self.test_suites[test_suite][test_case] = os.path.join(root, filename)
+                    self.test_suites[test_suite][test_case] = os.path.join(
+                        root, filename
+                    )
         return self
 
     @classmethod
-    def parse(cls, result_path: str, include_suites: set[str] | None = None) -> ResultsInfo:
+    def parse(
+        cls, result_path: str, include_suites: set[str] | None = None
+    ) -> ResultsInfo:
         result_path = os.path.abspath(os.path.expanduser(result_path))
         # Expected path structure: results_dir/xemu_version/platform_info/gl_version/glsl_version
         components = result_path.rstrip(os.sep).split(os.sep)
@@ -136,6 +150,12 @@ class Difference:
     golden_artifact: str
     distance: float
 
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
     @property
     def fully_qualified_test_name(self) -> str:
         return f"{self.test_suite}:{self.test_case}"
@@ -144,7 +164,9 @@ class Difference:
     def difference_filename(self) -> str:
         return f"{os.path.join(self.test_suite, self.test_case)}-diff.png"
 
-    def generate_difference_image(self, perceptualdiff: str, output_path: str) -> tuple[int, str, str]:
+    def generate_difference_image(
+        self, perceptualdiff: str, output_path: str
+    ) -> tuple[int, str, str]:
         """Generates a diff image in the given output_path using perceptualdiff.
 
         Returns tuple[ExitCode, STDOUT, STDERR]
@@ -189,6 +211,12 @@ class ComparisonSummary:
     goldens_without_results: list[str] = field(default_factory=list)
     tests_with_differences: dict[str, float] = field(default_factory=dict)
 
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "result_identifier": self.result_identifier,
@@ -224,6 +252,12 @@ class KnownIssueFilter:
     gl: str | None = None
     glsl: str | None = None
 
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
     def matches(self, machine: str, gl: str, glsl: str) -> bool:
         if self.platform and not _match_pattern(self.platform, machine):
             return False
@@ -238,6 +272,12 @@ class KnownIssue:
 
     text: str
     filter: KnownIssueFilter | None = None
+
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
 
     def matches(self, machine: str, gl: str, glsl: str) -> bool:
         if not self.filter:
@@ -263,7 +303,9 @@ class KnownIssuesRegistry:
             logger.exception("Failed to load known issues from '%s'", file_path)
             return cls({})
 
-    def get_known_issues(self, suite: str, test_name: str, machine: str, gl: str, glsl: str) -> list[str]:
+    def get_known_issues(
+        self, suite: str, test_name: str, machine: str, gl: str, glsl: str
+    ) -> list[str]:
         """Returns all matching known issues for a given test suite, test case, and environment."""
         issues: list[str] = []
         suite_data = self._raw_data.get(suite)
@@ -322,6 +364,12 @@ class TestResultItem:
     xemu_diff_score: float | None = None
     known_issues: list[str] = field(default_factory=list)
 
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
     @property
     def has_diff(self) -> bool:
         return bool(self.hw_diff_image_path or self.xemu_diff_image_path)
@@ -356,6 +404,12 @@ class PipelineReport:
     test_results: list[TestResultItem] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "generated_at": self.generated_at,
@@ -375,3 +429,62 @@ class PipelineReport:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, sort_keys=True)
+
+
+@dataclass
+class ComparisonsMap:
+    """Mapping of result paths to baseline golden result paths."""
+
+    registry: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
+
+@dataclass
+class RendererInfo:
+    """Renderer configuration output by test runner."""
+
+    vulkan: bool = False
+
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
+
+@dataclass
+class RunnerInfo:
+    """Runner metadata output by test runner."""
+
+    iso: str = ""
+    test_failure_retries: int = 2
+    suite_allowlist: list[str] | None = None
+
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)
+
+
+@dataclass
+class TestResultsManifest:
+    """Manifest of test outcomes (passed, failed, flaky, missing_artifacts)."""
+
+    __test__ = False
+
+    passed: dict[str, Any] = field(default_factory=dict)
+    failed: dict[str, Any] = field(default_factory=dict)
+    flaky: dict[str, Any] = field(default_factory=dict)
+    missing_artifacts: list[str] = field(default_factory=list)
+
+    @classmethod
+    def get_json_schema(cls) -> dict[str, Any]:
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
+
+        return generate_json_schema(cls)

@@ -13,7 +13,9 @@ class TestPipeline(unittest.TestCase):
     def test_run_pipeline_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Results dir structure: results/v1/Linux_x86_64/4.6_Core/4.60/SuiteA/Test1.png
-            results_dir = os.path.join(tmpdir, "results", "v1", "Linux_x86_64", "4.6_Core", "4.60")
+            results_dir = os.path.join(
+                tmpdir, "results", "v1", "Linux_x86_64", "4.6_Core", "4.60"
+            )
             suite_a = os.path.join(results_dir, "SuiteA")
             os.makedirs(suite_a)
             with open(os.path.join(results_dir, "results.json"), "w") as f:
@@ -36,13 +38,21 @@ class TestPipeline(unittest.TestCase):
             known_issues_path = os.path.join(tmpdir, "known_issues.json")
             with open(known_issues_path, "w") as f:
                 json.dump(
-                    {"SuiteA": {"Test2": {"issues": [{"text": "Expected driver bug on Test2"}]}}},
+                    {
+                        "SuiteA": {
+                            "Test2": {
+                                "issues": [{"text": "Expected driver bug on Test2"}]
+                            }
+                        }
+                    },
                     f,
                 )
 
             output_dir = os.path.join(tmpdir, "output")
 
-            with patch("xemu_pgraph_ci_tools.comparator._compare_perceptualdiff") as mock_comp:
+            with patch(
+                "xemu_pgraph_ci_tools.comparator._compare_perceptualdiff"
+            ) as mock_comp:
                 mock_comp.return_value = (set(), set(), [])
 
                 report = run_pipeline(

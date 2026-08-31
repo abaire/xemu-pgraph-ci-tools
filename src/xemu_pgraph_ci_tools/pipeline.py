@@ -1,3 +1,5 @@
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import argparse
@@ -16,6 +18,7 @@ from xemu_pgraph_ci_tools.models import (
     ResultsInfo,
     TestResultItem,
 )
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 from xemu_pgraph_ci_tools.xemu_diffs import generate_diffs as generate_xemu_diffs
 
 logger = logging.getLogger(__name__)
@@ -299,8 +302,18 @@ def main() -> int:
         action="store_true",
         help="Enable verbose debug logging.",
     )
+    parser.add_argument(
+        "--emit-schema",
+        "--schema",
+        action="store_true",
+        help="Emit JSON Schema for the output report.json artifact and exit.",
+    )
 
     args = parser.parse_args()
+
+    if args.emit_schema:
+        print(emit_json_schema(PipelineReport))
+        return 0
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")

@@ -16,6 +16,7 @@ from xemu_pgraph_ci_tools.models import (
     Difference,
     ResultsInfo,
 )
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,9 @@ def _fetch_hw_goldens(output_dir: str) -> None:
     Repo.clone_from(_HW_GOLDEN_GIT_URL, output_dir, depth=1)
 
 
-def _compare_lpips(results_info: ResultsInfo, golden_info: ResultsInfo) -> tuple[set[str], set[str], list[Difference]]:
+def _compare_lpips(
+    results_info: ResultsInfo, golden_info: ResultsInfo
+) -> tuple[set[str], set[str], list[Difference]]:
     import lpips
 
     loss_fn = lpips.LPIPS(net="alex")
@@ -79,7 +82,11 @@ def _compare_lpips(results_info: ResultsInfo, golden_info: ResultsInfo) -> tuple
                 distance_value,
             )
 
-            differences.append(Difference(test_suite, test_case, artifact, golden_artifact, distance_value))
+            differences.append(
+                Difference(
+                    test_suite, test_case, artifact, golden_artifact, distance_value
+                )
+            )
         print()
 
     return only_results, only_goldens, differences
@@ -110,7 +117,9 @@ def _compare_perceptualdiff(
                 continue
 
             diff = Difference(test_suite, test_case, artifact, golden_artifact, -1)
-            result, stdout, _stderr = diff.generate_difference_image(perceptualdiff, comparison_output_directory)
+            result, stdout, _stderr = diff.generate_difference_image(
+                perceptualdiff, comparison_output_directory
+            )
             if not result:
                 continue
 
@@ -119,7 +128,9 @@ def _compare_perceptualdiff(
                 match = PERCEPTUALDIFF_DIFFERENCE_RE.match(line)
                 if match:
                     diff_score = float(match.group(1))
-            diff = Difference(test_suite, test_case, artifact, golden_artifact, diff_score)
+            diff = Difference(
+                test_suite, test_case, artifact, golden_artifact, diff_score
+            )
             differences.append(diff)
         print()
 
@@ -169,7 +180,9 @@ def perform_comparison(
                 result_identifier=results_info.run_identifier,
                 golden_identifier=against_name,
             )
-            summary.save_to_file(os.path.join(comparison_output_directory, "summary.json"))
+            summary.save_to_file(
+                os.path.join(comparison_output_directory, "summary.json")
+            )
             return summary
 
         for diff in sorted(diffs, key=lambda x: f"{x.test_suite}:{x.test_case}"):
@@ -191,7 +204,9 @@ def perform_comparison(
                 result_identifier=results_info.run_identifier,
                 golden_identifier=against_name,
             )
-            summary.save_to_file(os.path.join(comparison_output_directory, "summary.json"))
+            summary.save_to_file(
+                os.path.join(comparison_output_directory, "summary.json")
+            )
             return summary
 
     logger.debug("Writing output to %s", comparison_output_directory)
@@ -201,7 +216,9 @@ def perform_comparison(
         golden_identifier=against_name,
         tests_without_goldens=sorted(only_results),
         goldens_without_results=sorted(only_golden),
-        tests_with_differences={diff.fully_qualified_test_name: diff.distance for diff in diffs},
+        tests_with_differences={
+            diff.fully_qualified_test_name: diff.distance for diff in diffs
+        },
     )
     summary.save_to_file(os.path.join(comparison_output_directory, "summary.json"))
     return summary
@@ -223,6 +240,8 @@ def _process_arguments_and_run() -> int:
     )
     parser.add_argument(
         "results",
+        nargs="?",
+        default=None,
         help="Path to the root of the results to compare against the golden results.",
     )
     parser.add_argument(
@@ -242,7 +261,9 @@ def _process_arguments_and_run() -> int:
         "-a",
         help="Path to the root of the results to consider golden. Omit to test against the HW results repo.",
     )
-    parser.add_argument("--cache-path", "-C", default="cache", help="Path to persistent cache area.")
+    parser.add_argument(
+        "--cache-path", "-C", default="cache", help="Path to persistent cache area."
+    )
     parser.add_argument(
         "--perceptualdiff",
         default="perceptualdiff",
@@ -264,8 +285,21 @@ def _process_arguments_and_run() -> int:
         "--include-suites-file",
         help="Path to a file containing test suite names to process (one per line). If omitted, all suites are processed.",
     )
+    parser.add_argument(
+        "--emit-schema",
+        "--schema",
+        action="store_true",
+        help="Emit JSON Schema for output summary.json artifact and exit.",
+    )
 
     args = parser.parse_args()
+
+    if args.emit_schema:
+        print(emit_json_schema(ComparisonSummary))
+        return 0
+
+    if not args.results:
+        parser.error("the following arguments are required: results")
 
     if args.list:
         local_results = _discover_results(args.results)
