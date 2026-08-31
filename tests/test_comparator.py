@@ -75,7 +75,9 @@ class TestComparator(unittest.TestCase):
                     stdout=b"100 pixels are different\n",
                     stderr=b"",
                 )
-                code, stdout, _stderr = diff.generate_difference_image("perceptualdiff", tmpdir)
+                code, stdout, _stderr = diff.generate_difference_image(
+                    "perceptualdiff", tmpdir
+                )
                 assert code == 1
                 assert "100 pixels are different" in stdout
                 mock_run.assert_called_once()

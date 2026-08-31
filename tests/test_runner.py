@@ -63,7 +63,9 @@ class TestRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = os.path.join(tmpdir, "xemu.app")
             macos_dir = os.path.join(app_dir, "Contents", "MacOS")
-            lib_dir = os.path.join(app_dir, "Contents", "Libraries", platform.uname().machine)
+            lib_dir = os.path.join(
+                app_dir, "Contents", "Libraries", platform.uname().machine
+            )
             res_dir = os.path.join(app_dir, "Contents", "Resources")
             os.makedirs(macos_dir)
             os.makedirs(lib_dir)
@@ -83,7 +85,10 @@ class TestRunner(unittest.TestCase):
         with patch("platform.system", return_value="Linux"):
             cmd, toml_path = _build_emulator_command("/path/to/xemu.AppImage")
             assert cmd == '"/path/to/xemu.AppImage" -dvd_path {ISO}'
-            assert toml_path == "/path/to/xemu.AppImage.home/.local/share/xemu/xemu/xemu.toml"
+            assert (
+                toml_path
+                == "/path/to/xemu.AppImage.home/.local/share/xemu/xemu/xemu.toml"
+            )
 
 
 if __name__ == "__main__":

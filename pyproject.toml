@@ -41,6 +41,7 @@ xemu-pgraph-compare = "xemu_pgraph_ci_tools.comparator:main"
 xemu-pgraph-hw-diff = "xemu_pgraph_ci_tools.hw_diffs:main"
 xemu-pgraph-xemu-diff = "xemu_pgraph_ci_tools.xemu_diffs:main"
 xemu-pgraph-pipeline = "xemu_pgraph_ci_tools.pipeline:main"
+xemu-pgraph-schema = "xemu_pgraph_ci_tools.schema:main"
 
 [project.urls]
 Documentation = "https://github.com/abaire/xemu-pgraph-ci-tools#readme"
