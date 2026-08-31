@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xemu-pgraph-ci-tools"
+dynamic = ["version"]
+description = ''
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "Erik Abair", email = "erik.abair@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "nxdk-pgraph-test-runner>=0.1.27",
+  "nxdk-pgraph-test-repacker>=0.1.0",
+  "requests~=2.32",
+  "GitPython~=3.1",
+  "frozendict~=2.4",
+]
+
+[project.optional-dependencies]
+lpips = [
+  "lpips~=0.1.4",
+  "opencv-python~=4.10",
+]
+
+[project.scripts]
+xemu-pgraph-run = "xemu_pgraph_ci_tools.runner:main"
+xemu-pgraph-merge = "xemu_pgraph_ci_tools.runner:merge_main"
+xemu-pgraph-compare = "xemu_pgraph_ci_tools.comparator:main"
+xemu-pgraph-hw-diff = "xemu_pgraph_ci_tools.hw_diffs:main"
+xemu-pgraph-xemu-diff = "xemu_pgraph_ci_tools.xemu_diffs:main"
+xemu-pgraph-pipeline = "xemu_pgraph_ci_tools.pipeline:main"
+
+[project.urls]
+Documentation = "https://github.com/abaire/xemu-pgraph-ci-tools#readme"
+Issues = "https://github.com/abaire/xemu-pgraph-ci-tools/issues"
+Source = "https://github.com/abaire/xemu-pgraph-ci-tools"
+
+[tool.hatch.version]
+path = "src/xemu_pgraph_ci_tools/__about__.py"
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+  "pytest",
+  "types-requests",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/xemu_pgraph_ci_tools tests}"
+
+[tool.mypy]
+disable_error_code = ["import-untyped", "import-not-found"]
+
+[tool.coverage.run]
+source_pkgs = ["xemu_pgraph_ci_tools", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/xemu_pgraph_ci_tools/__about__.py",
+]
+
+[tool.coverage.paths]
+xemu_pgraph_ci_tools = ["src/xemu_pgraph_ci_tools", "*/xemu-pgraph-ci-tools/src/xemu_pgraph_ci_tools"]
+tests = ["tests", "*/xemu-pgraph-ci-tools/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
