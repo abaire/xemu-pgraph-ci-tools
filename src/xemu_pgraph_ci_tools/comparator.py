@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import logging
 import os
 import shutil
 import sys
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 from xemu_pgraph_ci_tools.models import (
     PERCEPTUALDIFF_DIFFERENCE_RE,
     ComparisonSummary,
     Difference,
+    DiffTask,
     ResultsInfo,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +141,7 @@ def perform_comparison(
     *,
     use_lpips: bool = True,
     include_suites: set[str] | None = None,
+    summary_filename: str | None = "summary.json",
 ) -> ComparisonSummary:
     results_info = ResultsInfo.parse(results_path, include_suites)
 
@@ -158,8 +165,6 @@ def perform_comparison(
         results_info.output_subdirectory,
         golden_info.run_identifier_subdirectory,
     )
-    if os.path.isdir(comparison_output_directory):
-        shutil.rmtree(comparison_output_directory)
     os.makedirs(comparison_output_directory, exist_ok=True)
 
     if use_lpips:
@@ -168,8 +173,10 @@ def perform_comparison(
             summary = ComparisonSummary(
                 result_identifier=results_info.run_identifier,
                 golden_identifier=against_name,
+                tests_evaluated=sorted(results_info.get_flattened_tests()),
             )
-            summary.save_to_file(os.path.join(comparison_output_directory, "summary.json"))
+            if summary_filename:
+                summary.save_to_file(os.path.join(comparison_output_directory, summary_filename))
             return summary
 
         for diff in sorted(diffs, key=lambda x: f"{x.test_suite}:{x.test_case}"):
@@ -190,8 +197,10 @@ def perform_comparison(
             summary = ComparisonSummary(
                 result_identifier=results_info.run_identifier,
                 golden_identifier=against_name,
+                tests_evaluated=sorted(results_info.get_flattened_tests()),
             )
-            summary.save_to_file(os.path.join(comparison_output_directory, "summary.json"))
+            if summary_filename:
+                summary.save_to_file(os.path.join(comparison_output_directory, summary_filename))
             return summary
 
     logger.debug("Writing output to %s", comparison_output_directory)
@@ -202,9 +211,255 @@ def perform_comparison(
         tests_without_goldens=sorted(only_results),
         goldens_without_results=sorted(only_golden),
         tests_with_differences={diff.fully_qualified_test_name: diff.distance for diff in diffs},
+        tests_evaluated=sorted(results_info.get_flattened_tests()),
     )
-    summary.save_to_file(os.path.join(comparison_output_directory, "summary.json"))
+    if summary_filename:
+        summary.save_to_file(os.path.join(comparison_output_directory, summary_filename))
     return summary
+
+
+def discover_diff_tasks(
+    images_dir: str,
+    get_output_path_fn: Callable[[str, str, str], str],
+    get_golden_path_fn: Callable[[str, str, str], str],
+    *,
+    include_suites: set[str] | None = None,
+    results_path: str = "",
+    results_identifier: str = "",
+    golden_identifier: str = "",
+    comparison_output_dir: str = "",
+    skip_existing: bool = True,
+) -> list[DiffTask]:
+    """Discovers individual diff tasks for images in images_dir."""
+    tasks: list[DiffTask] = []
+    if not os.path.isdir(images_dir):
+        return tasks
+
+    for root, dirnames, filenames in os.walk(images_dir):
+        if os.path.basename(root).startswith("."):
+            dirnames.clear()
+            continue
+        if dirnames:
+            continue
+        suite = os.path.basename(root)
+        if suite in {"perceptualdiff", "scripts", "cache"}:
+            continue
+        if include_suites and suite not in include_suites:
+            continue
+
+        for filename in sorted(filenames):
+            if filename.endswith(".png") and not filename.endswith("-diff.png"):
+                test_case = os.path.splitext(filename)[0]
+                source_image = os.path.join(root, filename)
+                golden_image = get_golden_path_fn(suite, test_case, source_image)
+                output_diff_image = get_output_path_fn(suite, test_case, source_image)
+
+                if skip_existing and os.path.isfile(output_diff_image):
+                    continue
+
+                tasks.append(
+                    DiffTask(
+                        suite=suite,
+                        test_case=test_case,
+                        source_image=source_image,
+                        golden_image=golden_image,
+                        output_diff_image=output_diff_image,
+                        results_path=results_path or images_dir,
+                        results_identifier=results_identifier,
+                        golden_identifier=golden_identifier,
+                        comparison_output_dir=comparison_output_dir,
+                    )
+                )
+    return tasks
+
+
+def partition_diff_tasks(tasks: list[DiffTask], max_shards: int = 32) -> list[list[DiffTask]]:
+    """Splits tasks evenly across up to max_shards batches."""
+    if not tasks:
+        return []
+    shard_count = min(len(tasks), max_shards)
+    shards: list[list[DiffTask]] = [[] for _ in range(shard_count)]
+    for i, task in enumerate(tasks):
+        shards[i % shard_count].append(task)
+    return shards
+
+
+def get_shard_slice(tasks: list[DiffTask], shard_index: int, shard_count: int) -> list[DiffTask]:
+    """Returns the slice of tasks for a given shard."""
+    if shard_count <= 0 or shard_index < 0 or shard_index >= shard_count:
+        return []
+    return [task for i, task in enumerate(tasks) if i % shard_count == shard_index]
+
+
+def _get_staged_relative_path(path: str, output_dir: str) -> str:
+    path_norm = os.path.normpath(path)
+    if not os.path.isabs(path_norm):
+        return path_norm
+
+    try:
+        rel_cwd = os.path.relpath(path_norm, os.getcwd())
+        if not rel_cwd.startswith(".."):
+            return rel_cwd
+    except ValueError:
+        pass
+
+    out_name = os.path.basename(os.path.normpath(output_dir))
+    if out_name and out_name in path_norm:
+        idx = path_norm.find(out_name)
+        return path_norm[idx:]
+
+    return os.path.basename(path_norm)
+
+
+def process_diff_tasks(
+    tasks: list[DiffTask],
+    output_dir: str,
+    *,
+    perceptualdiff: str = "perceptualdiff",
+    diff_threshold: float = 0.00001,
+    use_lpips: bool = False,
+    shard_id: str | None = None,
+    stage_dir: str | None = None,
+) -> dict[str, ComparisonSummary]:
+    """Processes a list of DiffTasks, generates difference images, and writes partial summaries."""
+    if stage_dir:
+        os.makedirs(stage_dir, exist_ok=True)
+
+    tasks_by_comp_dir: dict[str, list[DiffTask]] = {}
+    for task in tasks:
+        comp_dir = task.comparison_output_dir or output_dir
+        tasks_by_comp_dir.setdefault(comp_dir, []).append(task)
+
+    summaries: dict[str, ComparisonSummary] = {}
+    staged_files_count = 0
+
+    for comp_dir, dir_tasks in tasks_by_comp_dir.items():
+        os.makedirs(comp_dir, exist_ok=True)
+        results_identifier = dir_tasks[0].results_identifier if dir_tasks else ""
+        golden_identifier = dir_tasks[0].golden_identifier if dir_tasks else ""
+
+        tests_without_goldens: list[str] = []
+        tests_with_differences: dict[str, float] = {}
+        tests_evaluated: list[str] = []
+
+        for task in dir_tasks:
+            fq_name = task.fully_qualified_test_name
+            tests_evaluated.append(fq_name)
+
+            if not os.path.isfile(task.golden_image):
+                tests_without_goldens.append(fq_name)
+                continue
+
+            if use_lpips:
+                import lpips
+
+                loss_fn = lpips.LPIPS(net="alex")
+                art_img = lpips.im2tensor(lpips.load_image(task.source_image))
+                gold_img = lpips.im2tensor(lpips.load_image(task.golden_image))
+                dist = float(loss_fn(art_img, gold_img).item())
+                if dist >= diff_threshold:
+                    tests_with_differences[fq_name] = dist
+                    task.generate_difference_image(perceptualdiff)
+                    if stage_dir and os.path.isfile(task.output_diff_image):
+                        rel = _get_staged_relative_path(task.output_diff_image, output_dir)
+                        dst = os.path.join(stage_dir, rel)
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        shutil.copy2(task.output_diff_image, dst)
+                        staged_files_count += 1
+            else:
+                returncode, stdout, _stderr = task.generate_difference_image(perceptualdiff)
+                diff_score = -1.0
+                for line in stdout.split("\n"):
+                    match = PERCEPTUALDIFF_DIFFERENCE_RE.match(line)
+                    if match:
+                        diff_score = float(match.group(1))
+                if diff_score > 0 or returncode != 0:
+                    tests_with_differences[fq_name] = diff_score
+                    if stage_dir and os.path.isfile(task.output_diff_image):
+                        rel = _get_staged_relative_path(task.output_diff_image, output_dir)
+                        dst = os.path.join(stage_dir, rel)
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        shutil.copy2(task.output_diff_image, dst)
+                        staged_files_count += 1
+
+        summary = ComparisonSummary(
+            result_identifier=results_identifier,
+            golden_identifier=golden_identifier,
+            tests_without_goldens=sorted(tests_without_goldens),
+            goldens_without_results=[],
+            tests_with_differences=tests_with_differences,
+            tests_evaluated=sorted(tests_evaluated),
+        )
+        summaries[comp_dir] = summary
+
+        summary_filename = f"summary.{shard_id}.json" if shard_id else "summary.json"
+        summary_path = os.path.join(comp_dir, summary_filename)
+        summary.save_to_file(summary_path)
+
+        if stage_dir and os.path.isfile(summary_path):
+            rel = _get_staged_relative_path(summary_path, output_dir)
+            dst = os.path.join(stage_dir, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(summary_path, dst)
+            staged_files_count += 1
+
+    if stage_dir and staged_files_count == 0:
+        with open(os.path.join(stage_dir, "KEEP_ARTIFACT"), "w", encoding="utf-8") as f:
+            f.write("")
+
+    return summaries
+
+
+def reduce_comparison_summaries(comparison_dir: str) -> None:
+    """Finds all summary*.json files in subdirectories of comparison_dir, merges them into summary.json, and cleans up partial files."""
+    if not os.path.isdir(comparison_dir):
+        logger.info("Comparison directory '%s' does not exist.", comparison_dir)
+        return
+
+    dirs_with_summaries: set[str] = set()
+    for root, _dirnames, filenames in os.walk(comparison_dir):
+        if any(f.startswith("summary") and f.endswith(".json") for f in filenames):
+            dirs_with_summaries.add(root)
+
+    for comp_dir in sorted(dirs_with_summaries):
+        summary_files = [f for f in os.listdir(comp_dir) if f.startswith("summary") and f.endswith(".json")]
+        if not summary_files:
+            continue
+
+        merged_summary = ComparisonSummary(
+            result_identifier="",
+            golden_identifier="",
+        )
+
+        base_summary_file = os.path.join(comp_dir, "summary.json")
+        if os.path.isfile(base_summary_file):
+            try:
+                base = ComparisonSummary.load_from_file(base_summary_file)
+                merged_summary.merge(base)
+            except (json.JSONDecodeError, OSError, TypeError, KeyError):
+                logger.warning("Could not load base summary from %s", base_summary_file)
+
+        partial_files_to_delete: list[str] = []
+        for sf in summary_files:
+            if sf == "summary.json":
+                continue
+            full_path = os.path.join(comp_dir, sf)
+            try:
+                partial_summary = ComparisonSummary.load_from_file(full_path)
+                merged_summary.merge(partial_summary)
+                partial_files_to_delete.append(full_path)
+            except (json.JSONDecodeError, OSError, TypeError, KeyError):
+                logger.warning("Could not load partial summary from %s", full_path)
+
+        merged_summary.save_to_file(base_summary_file)
+        logger.info("Saved unified summary to %s", base_summary_file)
+
+        for pf in partial_files_to_delete:
+            try:
+                os.remove(pf)
+                logger.debug("Removed partial summary file %s", pf)
+            except OSError:
+                logger.warning("Failed to remove partial summary file %s", pf)
 
 
 def _discover_results(results_root: str) -> list[str]:

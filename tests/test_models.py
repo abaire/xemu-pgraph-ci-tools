@@ -28,6 +28,18 @@ class TestModels(unittest.TestCase):
         assert info.output_subdirectory == os.path.join("v0.8.15", "Linux_x86_64", "4.6_Core", "4.60")
         assert info.run_identifier_subdirectory == "v0.8.15__Linux_x86_64__4.6_Core__4.60"
 
+    def test_results_info_parsing_3_levels(self):
+        fake_path = (
+            "/path/to/results/xemu-0.8.134-fc9980d2962cbec656253106ea2e121fab1e68d4/Darwin_arm64/gl_Apple_Apple_M5_Max"
+        )
+        info = ResultsInfo.parse(fake_path)
+        assert info.xemu_version == "xemu-0.8.134-fc9980d2962cbec656253106ea2e121fab1e68d4"
+        assert info.platform_info == "Darwin_arm64"
+        assert info.gl_info == "gl_Apple_Apple_M5_Max"
+        assert info.output_subdirectory == os.path.join(
+            "xemu-0.8.134-fc9980d2962cbec656253106ea2e121fab1e68d4", "Darwin_arm64", "gl_Apple_Apple_M5_Max"
+        )
+
     def test_results_info_find_images(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             suite_dir = os.path.join(tmpdir, "v1", "Darwin", "4.1", "4.10", "suite1")
