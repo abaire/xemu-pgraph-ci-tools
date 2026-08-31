@@ -1,3 +1,5 @@
+# ruff: noqa: PLC0415
+
 from __future__ import annotations
 
 from typing import Any

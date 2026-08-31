@@ -1,3 +1,5 @@
+# ruff: noqa: PLC0415, PLR2004
+
 from __future__ import annotations
 
 import dataclasses

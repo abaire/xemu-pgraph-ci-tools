@@ -1,3 +1,5 @@
+# ruff: noqa: T201, PLC0415
+
 from __future__ import annotations
 
 import argparse
@@ -93,18 +95,12 @@ def run_pipeline(
             perceptualdiff=perceptualdiff,
         )
     else:
-        logger.warning(
-            "No valid xemu baseline directory provided; creating empty comparisons.json"
-        )
-        with open(
-            os.path.join(xemu_comparison_dir, "comparisons.json"), "w", encoding="utf-8"
-        ) as f:
+        logger.warning("No valid xemu baseline directory provided; creating empty comparisons.json")
+        with open(os.path.join(xemu_comparison_dir, "comparisons.json"), "w", encoding="utf-8") as f:
             f.write("{}")
 
     # 3. Load Known Issues
-    resolved_known_issues_path = _find_known_issues_file(
-        known_issues_path, results_dir, golden_dir, xemu_baseline_dir
-    )
+    resolved_known_issues_path = _find_known_issues_file(known_issues_path, results_dir, golden_dir, xemu_baseline_dir)
     registry = (
         KnownIssuesRegistry.load_from_file(resolved_known_issues_path)
         if resolved_known_issues_path
@@ -138,11 +134,7 @@ def run_pipeline(
             "Xbox__Xbox__DirectX__nv2a",
             "summary.json",
         )
-        hw_summary = (
-            ComparisonSummary.load_from_file(hw_summary_path)
-            if os.path.isfile(hw_summary_path)
-            else None
-        )
+        hw_summary = ComparisonSummary.load_from_file(hw_summary_path) if os.path.isfile(hw_summary_path) else None
 
         # Load Xemu baseline summary for this run
         xemu_summary = None
@@ -184,12 +176,8 @@ def run_pipeline(
                         hw_diff_img = potential_diff_img
 
                 # Check HW golden existence
-                hw_golden_path = os.path.join(
-                    golden_dir, suite_name, f"{test_case}.png"
-                )
-                hw_golden_img: str | None = (
-                    hw_golden_path if os.path.isfile(hw_golden_path) else None
-                )
+                hw_golden_path = os.path.join(golden_dir, suite_name, f"{test_case}.png")
+                hw_golden_img: str | None = hw_golden_path if os.path.isfile(hw_golden_path) else None
                 if hw_golden_img is None:
                     missing_goldens += 1
 
@@ -209,15 +197,11 @@ def run_pipeline(
                         )
                         if os.path.isfile(potential_xemu_diff_img):
                             xemu_diff_img = potential_xemu_diff_img
-                        potential_xemu_golden = os.path.join(
-                            baseline_path, suite_name, f"{test_case}.png"
-                        )
+                        potential_xemu_golden = os.path.join(baseline_path, suite_name, f"{test_case}.png")
                         if os.path.isfile(potential_xemu_golden):
                             xemu_golden_img = potential_xemu_golden
 
-                known_issues = registry.get_known_issues(
-                    suite_name, test_case, machine, gl, glsl
-                )
+                known_issues = registry.get_known_issues(suite_name, test_case, machine, gl, glsl)
 
                 item = TestResultItem(
                     suite=suite_name,
@@ -270,9 +254,7 @@ def run_pipeline(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate PGraph regression visual diff report & structured JSON."
-    )
+    parser = argparse.ArgumentParser(description="Generate PGraph regression visual diff report & structured JSON.")
     parser.add_argument(
         "--results-dir",
         default="results",

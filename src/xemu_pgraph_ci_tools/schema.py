@@ -1,3 +1,5 @@
+# ruff: noqa: T201, PLC0415
+
 from __future__ import annotations
 
 import argparse
