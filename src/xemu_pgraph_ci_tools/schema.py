@@ -1,4 +1,4 @@
-# ruff: noqa: T201, PLC0415
+# ruff: noqa: T201
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import sys
 import types
 import typing
 from typing import Any
+
+from xemu_pgraph_ci_tools import models
 
 
 def generate_json_schema(tp: Any, *, is_top_level: bool = True) -> dict[str, Any]:
@@ -103,8 +105,6 @@ def emit_json_schema(tp: Any) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from xemu_pgraph_ci_tools import models
-
     parser = argparse.ArgumentParser(description="Emit JSON schema for models.")
     parser.add_argument(
         "model",

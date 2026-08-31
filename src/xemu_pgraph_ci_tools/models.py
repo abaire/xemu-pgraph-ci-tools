@@ -1,4 +1,4 @@
-# ruff: noqa: PLC0415, PLR2004
+# ruff: noqa: PLR2004
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class ResultsInfo:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -152,7 +152,7 @@ class Difference:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -213,7 +213,7 @@ class ComparisonSummary:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -254,7 +254,7 @@ class KnownIssueFilter:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -275,7 +275,7 @@ class KnownIssue:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -366,7 +366,7 @@ class TestResultItem:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -406,7 +406,7 @@ class PipelineReport:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -439,7 +439,7 @@ class ComparisonsMap:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -452,7 +452,7 @@ class RendererInfo:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -467,7 +467,7 @@ class RunnerInfo:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)
 
@@ -485,6 +485,6 @@ class TestResultsManifest:
 
     @classmethod
     def get_json_schema(cls) -> dict[str, Any]:
-        from xemu_pgraph_ci_tools.schema import generate_json_schema
+        from xemu_pgraph_ci_tools.schema import generate_json_schema  # noqa: PLC0415
 
         return generate_json_schema(cls)

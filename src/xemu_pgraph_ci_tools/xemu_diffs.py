@@ -1,4 +1,4 @@
-# ruff: noqa: T201, PLC0415, PLR2004
+# ruff: noqa: T201, PLR2004
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from xemu_pgraph_ci_tools.comparator import perform_comparison
 from xemu_pgraph_ci_tools.models import ComparisonsMap
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +202,6 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.emit_schema:
-        from xemu_pgraph_ci_tools.schema import emit_json_schema
-
         print(emit_json_schema(ComparisonsMap))
         return 0
 

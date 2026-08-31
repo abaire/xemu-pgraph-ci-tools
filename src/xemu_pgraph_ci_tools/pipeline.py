@@ -1,4 +1,4 @@
-# ruff: noqa: T201, PLC0415
+# ruff: noqa: T201
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from xemu_pgraph_ci_tools.models import (
     ResultsInfo,
     TestResultItem,
 )
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 from xemu_pgraph_ci_tools.xemu_diffs import generate_diffs as generate_xemu_diffs
 
 logger = logging.getLogger(__name__)
@@ -311,8 +312,6 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.emit_schema:
-        from xemu_pgraph_ci_tools.schema import emit_json_schema
-
         print(emit_json_schema(PipelineReport))
         return 0
 

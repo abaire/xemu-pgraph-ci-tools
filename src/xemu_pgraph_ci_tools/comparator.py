@@ -16,6 +16,7 @@ from xemu_pgraph_ci_tools.models import (
     Difference,
     ResultsInfo,
 )
+from xemu_pgraph_ci_tools.schema import emit_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -294,8 +295,6 @@ def _process_arguments_and_run() -> int:
     args = parser.parse_args()
 
     if args.emit_schema:
-        from xemu_pgraph_ci_tools.schema import emit_json_schema
-
         print(emit_json_schema(ComparisonSummary))
         return 0
 
