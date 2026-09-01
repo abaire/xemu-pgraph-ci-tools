@@ -9,10 +9,30 @@ from xemu_pgraph_ci_tools.models import (
     Difference,
     DiffTask,
     ResultsInfo,
+    RunIdentifier,
+    SourceTestIdentifier,
 )
 
 
 class TestModels(unittest.TestCase):
+    def test_run_identifier(self):
+        ident = RunIdentifier.parse("results/v0.8.15/Linux_x86_64/4.6_Core/4.60")
+        assert ident.xemu_version == "v0.8.15"
+        assert ident.platform_info == "Linux_x86_64"
+        assert ident.gl_info == "4.6_Core:4.60"
+        assert ident.gl_version == "4.6_Core"
+        assert ident.glsl_version == "4.60"
+        assert ident.string_identifier == "v0.8.15:Linux_x86_64:4.6_Core:4.60"
+
+        source_test = SourceTestIdentifier(
+            xemu_version="v0.8.15",
+            platform_info="Linux_x86_64",
+            suite_name="SuiteA",
+            test_name="Test1",
+        )
+        assert source_test.suite_name == "SuiteA"
+        assert source_test.test_name == "Test1"
+
     def test_results_info_parsing(self):
         fake_path = "/path/to/results/v0.8.15/Linux_x86_64/4.6_Core/4.60"
         info = ResultsInfo.parse(fake_path)

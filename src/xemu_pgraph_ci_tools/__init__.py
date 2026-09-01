@@ -9,6 +9,8 @@ from xemu_pgraph_ci_tools.models import (
     Difference,
     DiffTask,
     ResultsInfo,
+    RunIdentifier,
+    SourceTestIdentifier,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "DiffTask",
     "Difference",
     "ResultsInfo",
+    "RunIdentifier",
+    "SourceTestIdentifier",
     "discover_diff_tasks",
     "generate_missing_hw_diffs",
     "generate_xemu_diffs",

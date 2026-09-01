@@ -13,19 +13,176 @@ from typing import Any
 PERCEPTUALDIFF_DIFFERENCE_RE = re.compile(r"(\d+) pixels are different")
 
 
+@dataclass(frozen=True)
+class RunIdentifier:
+    """Encapsulates components of a test run identifier (xemu version, platform, OpenGL/GLSL info)."""
+
+    xemu_version: str
+    platform_info: str
+    gl_info: str = ""
+    run_identifier: tuple[str, ...] = ()
+
+    @property
+    def gl_version(self) -> str:
+        parts = self.gl_info.split(":") if ":" in self.gl_info else self.gl_info.split("--")
+        return parts[0] if parts else ""
+
+    @property
+    def glsl_version(self) -> str:
+        parts = self.gl_info.split(":") if ":" in self.gl_info else self.gl_info.split("--")
+        return parts[1] if len(parts) > 1 else ""
+
+    @property
+    def path(self) -> str:
+        if self.run_identifier:
+            return str(os.path.join(*self.run_identifier)).replace(":", "--")
+        return str(os.path.join(self.xemu_version, self.platform_info, self.gl_info)).replace(":", "--")
+
+    @property
+    def minimal_path(self) -> str:
+        """Returns a path consisting of 'xemu/platform/gl'."""
+        return self.minimal_identifier().path
+
+    def minimal_identifier(self) -> RunIdentifier:
+        """Returns a RunIdentifier that omits any extraneous components of the run_identifier member."""
+        formatted_gl = self.gl_info.replace(":", "--")
+        return RunIdentifier(
+            run_identifier=(self.xemu_version, self.platform_info, formatted_gl),
+            xemu_version=self.xemu_version,
+            platform_info=self.platform_info,
+            gl_info=formatted_gl,
+        )
+
+    @property
+    def string_identifier(self) -> str:
+        return f"{self.xemu_version}:{self.platform_info}:{self.gl_info}"
+
+    @classmethod
+    def parse(cls, path_or_identifier: str) -> RunIdentifier:
+        """Parses a result directory path or colon/slash delimited identifier into a RunIdentifier."""
+        if not path_or_identifier:
+            return cls(xemu_version="unknown", platform_info="unknown", gl_info="unknown")
+
+        # Handle colon-separated identifiers like "xemu-0.8.134:Darwin_arm64:gl_Apple"
+        if ":" in path_or_identifier and not os.path.exists(path_or_identifier):
+            parts = [p for p in path_or_identifier.split(":") if p]
+            if len(parts) >= 3:
+                return cls(
+                    xemu_version=parts[0],
+                    platform_info=parts[1],
+                    gl_info=":".join(parts[2:]),
+                    run_identifier=tuple(parts),
+                )
+            if len(parts) == 2:
+                return cls(
+                    xemu_version=parts[0],
+                    platform_info=parts[1],
+                    gl_info="unknown",
+                    run_identifier=tuple(parts),
+                )
+
+        clean_path = path_or_identifier.replace("\\", "/").rstrip("/")
+        components = [c for c in clean_path.split("/") if c]
+
+        start_idx = 0
+        for i, c in enumerate(components):
+            if c in ("results", "baseline"):
+                start_idx = i + 1
+                while start_idx < len(components) and components[start_idx] in ("results", "baseline"):
+                    start_idx += 1
+                break
+
+        subparts = components[start_idx:] if start_idx < len(components) else components
+        if len(subparts) >= 4:
+            xemu_version = subparts[0]
+            platform_info = subparts[1]
+            gl_info = ":".join(subparts[2:])
+        elif len(subparts) == 3:
+            xemu_version = subparts[0]
+            platform_info = subparts[1]
+            gl_info = subparts[2]
+        elif len(subparts) == 2:
+            xemu_version = subparts[0]
+            platform_info = subparts[1]
+            gl_info = "unknown"
+        elif len(subparts) == 1:
+            xemu_version = subparts[0]
+            platform_info = "unknown"
+            gl_info = "unknown"
+        else:
+            xemu_version = "unknown"
+            platform_info = "unknown"
+            gl_info = "unknown"
+
+        return cls(
+            run_identifier=tuple(subparts),
+            xemu_version=xemu_version,
+            platform_info=platform_info,
+            gl_info=gl_info,
+        )
+
+
+@dataclass(frozen=True)
+class SourceTestIdentifier:
+    """Encapsulates the identification of a specific test artifact within a test run."""
+
+    xemu_version: str
+    platform_info: str
+    suite_name: str
+    test_name: str
+
+
 @dataclass
 class ResultsInfo:
     """Metadata about a test run directory, its environment, and discovered images."""
 
     result_path: str
-    xemu_version: str
-    platform_info: str
-    gl_info: str
+    identifier: RunIdentifier
     test_suites: dict[str, dict[str, str]] = field(default_factory=lambda: defaultdict(dict))
+
+    def __init__(
+        self,
+        result_path: str,
+        xemu_version: str | None = None,
+        platform_info: str | None = None,
+        gl_info: str | None = None,
+        test_suites: dict[str, dict[str, str]] | None = None,
+        identifier: RunIdentifier | None = None,
+    ) -> None:
+        self.result_path = result_path
+        if identifier is not None:
+            self.identifier = identifier
+        else:
+            self.identifier = RunIdentifier(
+                xemu_version=xemu_version or "unknown",
+                platform_info=platform_info or "unknown",
+                gl_info=gl_info or "unknown",
+            )
+        self.test_suites = test_suites if test_suites is not None else defaultdict(dict)
+
+    @property
+    def xemu_version(self) -> str:
+        return self.identifier.xemu_version
+
+    @property
+    def platform_info(self) -> str:
+        return self.identifier.platform_info
+
+    @property
+    def gl_info(self) -> str:
+        return self.identifier.gl_info
+
+    @property
+    def gl_version(self) -> str:
+        return self.identifier.gl_version
+
+    @property
+    def glsl_version(self) -> str:
+        return self.identifier.glsl_version
 
     @property
     def run_identifier(self) -> str:
-        return f"{self.xemu_version}:{self.platform_info}:{self.gl_info}"
+        return self.identifier.string_identifier
 
     @property
     def output_subdirectory(self) -> str:
@@ -34,16 +191,6 @@ class ResultsInfo:
     @property
     def run_identifier_subdirectory(self) -> str:
         return self.run_identifier.replace(":", "__")
-
-    @property
-    def gl_version(self) -> str:
-        parts = self.gl_info.split(":")
-        return parts[0] if parts else ""
-
-    @property
-    def glsl_version(self) -> str:
-        parts = self.gl_info.split(":")
-        return parts[1] if len(parts) > 1 else ""
 
     def get_flattened_tests(self) -> set[str]:
         """Return a flattened set of test_suite::test_case."""
@@ -83,59 +230,10 @@ class ResultsInfo:
     @classmethod
     def parse(cls, result_path: str, include_suites: set[str] | None = None) -> ResultsInfo:
         result_path = os.path.abspath(os.path.expanduser(result_path))
-        components = [c for c in result_path.rstrip(os.sep).split(os.sep) if c]
-        if "results" in components:
-            idx = len(components) - 1 - components[::-1].index("results")
-            subparts = components[idx + 1 :]
-            if len(subparts) >= 3:
-                xemu_version = subparts[0]
-                platform_info = subparts[1]
-                gl_info = ":".join(subparts[2:])
-            elif len(subparts) == 2:
-                xemu_version = subparts[0]
-                platform_info = subparts[1]
-                gl_info = "unknown"
-            elif len(subparts) == 1:
-                xemu_version = subparts[0]
-                platform_info = "unknown"
-                gl_info = "unknown"
-            else:
-                xemu_version = "unknown"
-                platform_info = "unknown"
-                gl_info = "unknown"
-        elif "baseline" in components:
-            idx = len(components) - 1 - components[::-1].index("baseline")
-            subparts = components[idx + 1 :]
-            if len(subparts) >= 3:
-                xemu_version = subparts[0]
-                platform_info = subparts[1]
-                gl_info = ":".join(subparts[2:])
-            elif len(subparts) == 2:
-                xemu_version = subparts[0]
-                platform_info = subparts[1]
-                gl_info = "unknown"
-            else:
-                xemu_version = "unknown"
-                platform_info = "unknown"
-                gl_info = "unknown"
-        elif len(components) >= 4:
-            xemu_version = components[-4]
-            platform_info = components[-3]
-            gl_info = f"{components[-2]}:{components[-1]}"
-        elif len(components) == 3:
-            xemu_version = components[-3]
-            platform_info = components[-2]
-            gl_info = components[-1]
-        else:
-            xemu_version = "unknown"
-            platform_info = "unknown"
-            gl_info = "unknown:unknown"
-
+        identifier = RunIdentifier.parse(result_path)
         return cls(
             result_path=result_path,
-            xemu_version=xemu_version,
-            platform_info=platform_info,
-            gl_info=gl_info,
+            identifier=identifier,
             test_suites=defaultdict(dict),
         ).find_result_images(include_suites)
 
