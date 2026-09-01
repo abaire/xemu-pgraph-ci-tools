@@ -11,7 +11,7 @@ from xemu_pgraph_ci_tools.comparator import (
     process_diff_tasks,
     reduce_comparison_summaries,
 )
-from xemu_pgraph_ci_tools.hw_diffs import generate_tasks, identify_missing_hw_diffs
+from xemu_pgraph_ci_tools.hw_diffs import identify_missing_hw_diffs, process_plan_tasks
 from xemu_pgraph_ci_tools.models import ComparisonSummary, DiffTask
 
 
@@ -244,7 +244,7 @@ class TestHwDiffs(unittest.TestCase):
             with open(plan_file, "w", encoding="utf-8") as f:
                 json.dump([task1.to_dict()], f)
 
-            generate_tasks(
+            process_plan_tasks(
                 tasks_file=plan_file,
                 output_dir=os.path.join(tmpdir, "comp_out"),
                 shard_index=0,
@@ -287,7 +287,7 @@ class TestHwDiffs(unittest.TestCase):
             with open(plan_file, "w", encoding="utf-8") as f:
                 json.dump([task1.to_dict()], f)
 
-            generate_tasks(
+            process_plan_tasks(
                 tasks_file=plan_file,
                 output_dir=os.path.join(tmpdir, "comp_out"),
                 shard_index=0,
@@ -301,7 +301,7 @@ class TestHwDiffs(unittest.TestCase):
             assert os.path.isfile(staged_summary)
             assert os.path.isfile(staged_diff)
 
-    @patch("xemu_pgraph_ci_tools.hw_diffs._fetch_hw_goldens")
+    @patch("xemu_pgraph_ci_tools.github.fetch_hw_goldens")
     @patch("xemu_pgraph_ci_tools.models.DiffTask.generate_difference_image")
     def test_generate_tasks_fetches_missing_goldens(self, mock_diff: MagicMock, mock_fetch: MagicMock) -> None:
         mock_diff.return_value = (0, "0 pixels are different", "")
@@ -333,7 +333,7 @@ class TestHwDiffs(unittest.TestCase):
             with open(plan_file, "w", encoding="utf-8") as f:
                 json.dump([task1.to_dict()], f)
 
-            generate_tasks(
+            process_plan_tasks(
                 tasks_file=plan_file,
                 output_dir=os.path.join(tmpdir, "comp_out"),
                 cache_path=cache_path,

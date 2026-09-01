@@ -253,7 +253,7 @@ def _process_xemu_diffs(
         output_dir=output_dir,
         perceptualdiff=perceptualdiff,
         shard_id=shard_id,
-        stage_dir=stage_dir,
+        staging_dir=stage_dir,
     )
 
     return registry

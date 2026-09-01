@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 import unittest
 
 from xemu_pgraph_ci_tools.models import (
     ComparisonSummary,
-    KnownIssueFilter,
-    KnownIssuesRegistry,
-    PipelineReport,
+    Difference,
+    DiffTask,
     ResultsInfo,
-    TestResultItem,
 )
 
 
@@ -57,39 +54,39 @@ class TestModels(unittest.TestCase):
             assert "test1-diff" not in info.test_suites["suite1"]
             assert info.get_flattened_tests() == {"suite1:test1"}
 
-    def test_known_issue_filter(self):
-        flt = KnownIssueFilter(platform="Linux*", gl="4.*", glsl="4.*")
-        assert flt.matches("Linux_x86_64", "4.6_Core", "4.60")
-        assert not flt.matches("Darwin_arm64", "4.1_Core", "4.10")
-        assert not flt.matches("Linux_x86_64", "3.3", "3.30")
+    def test_difference_properties(self):
+        diff = Difference(
+            test_suite="suite1",
+            test_case="test1",
+            result_artifact="/path/result.png",
+            golden_artifact="/path/golden.png",
+            distance=5.0,
+        )
+        assert diff.fully_qualified_test_name == "suite1:test1"
+        assert diff.difference_filename == os.path.join("suite1", "test1-diff.png")
+        d = diff.to_dict()
+        assert d["distance"] == 5.0
 
-    def test_known_issues_registry(self):
-        data = {
-            "SuiteA": {
-                "issues": [
-                    {
-                        "text": "Suite level bug on macOS",
-                        "filter": {"platform": "Darwin*"},
-                    }
-                ],
-                "Test1": {
-                    "issues": [
-                        {
-                            "text": "Test1 broken on all platforms",
-                        }
-                    ]
-                },
-            }
-        }
-        registry = KnownIssuesRegistry(data)
-
-        darwin_issues = registry.get_known_issues("SuiteA", "Test1", "Darwin_arm64", "4.1", "4.10")
-        assert "Suite level bug on macOS" in darwin_issues
-        assert "Test1 broken on all platforms" in darwin_issues
-
-        linux_issues = registry.get_known_issues("SuiteA", "Test1", "Linux_x86_64", "4.6", "4.60")
-        assert "Suite level bug on macOS" not in linux_issues
-        assert "Test1 broken on all platforms" in linux_issues
+    def test_diff_task_serialization(self):
+        task = DiffTask(
+            suite="suite1",
+            test_case="test1",
+            source_image="/path/source.png",
+            golden_image="/path/golden.png",
+            output_diff_image="/path/diff.png",
+            results_path="/results",
+            results_identifier="run1",
+            golden_identifier="golden1",
+            comparison_output_dir="/output",
+        )
+        assert task.fully_qualified_test_name == "suite1:test1"
+        data = task.to_dict()
+        loaded = DiffTask.from_dict(data)
+        assert loaded.suite == task.suite
+        assert loaded.test_case == task.test_case
+        assert loaded.source_image == task.source_image
+        assert loaded.golden_image == task.golden_image
+        assert loaded.output_diff_image == task.output_diff_image
 
     def test_comparison_summary_serialization(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -108,64 +105,6 @@ class TestModels(unittest.TestCase):
             assert loaded.golden_identifier == "Xbox_Hardware"
             assert loaded.tests_without_goldens == ["SuiteA:Test1"]
             assert loaded.tests_with_differences == {"SuiteA:Test3": 12.5}
-
-    def test_test_result_item_regression(self):
-        item_pass = TestResultItem(
-            suite="SuiteA",
-            test_name="TestPass",
-            result_image_path="/path/test.png",
-            hw_diff_score=0.0,
-        )
-        assert not item_pass.is_regression
-
-        item_known = TestResultItem(
-            suite="SuiteA",
-            test_name="TestKnown",
-            result_image_path="/path/test.png",
-            hw_diff_score=15.0,
-            known_issues=["Known HW glitch"],
-        )
-        assert not item_known.is_regression
-
-        item_regression = TestResultItem(
-            suite="SuiteA",
-            test_name="TestReg",
-            result_image_path="/path/test.png",
-            hw_diff_score=50.0,
-        )
-        assert item_regression.is_regression
-
-    def test_pipeline_report_save(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            report_file = os.path.join(tmpdir, "report.json")
-            report = PipelineReport(
-                generated_at="2026-08-30T12:00:00Z",
-                results_dir="/results",
-                golden_dir="/goldens",
-                xemu_baseline_dir=None,
-                total_tests=10,
-                passed_tests=8,
-                differing_tests=2,
-                missing_goldens=0,
-                regressions_count=1,
-                test_results=[
-                    TestResultItem(
-                        suite="SuiteA",
-                        test_name="Test1",
-                        result_image_path="/results/SuiteA/Test1.png",
-                        hw_diff_score=10.0,
-                    )
-                ],
-                metadata={"branch": "feature-x"},
-            )
-            report.save_json(report_file)
-
-            with open(report_file) as f:
-                data = json.load(f)
-            assert data["total_tests"] == 10
-            assert data["regressions_count"] == 1
-            assert data["metadata"]["branch"] == "feature-x"
-            assert len(data["test_results"]) == 1
 
 
 if __name__ == "__main__":

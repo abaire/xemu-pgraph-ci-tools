@@ -8,24 +8,14 @@ from xemu_pgraph_ci_tools.models import (
     ComparisonSummary,
     Difference,
     DiffTask,
-    KnownIssue,
-    KnownIssueFilter,
-    KnownIssuesRegistry,
-    PipelineReport,
     ResultsInfo,
-    TestResultItem,
 )
 
 __all__ = [
     "ComparisonSummary",
     "DiffTask",
     "Difference",
-    "KnownIssue",
-    "KnownIssueFilter",
-    "KnownIssuesRegistry",
-    "PipelineReport",
     "ResultsInfo",
-    "TestResultItem",
     "discover_diff_tasks",
     "generate_missing_hw_diffs",
     "generate_xemu_diffs",
@@ -37,7 +27,6 @@ __all__ = [
     "perform_comparison",
     "process_diff_tasks",
     "reduce_comparison_summaries",
-    "run_pipeline",
     "runner_main",
 ]
 
@@ -67,10 +56,6 @@ def __getattr__(name: str) -> Any:
         if name == "generate_xemu_diffs":
             return xd.generate_diffs
         return xd.identify_missing_xemu_diffs
-    if name == "run_pipeline":
-        from xemu_pgraph_ci_tools.pipeline import run_pipeline
-
-        return run_pipeline
     if name == "runner_main":
         from xemu_pgraph_ci_tools.runner import main
 

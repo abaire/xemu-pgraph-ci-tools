@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import dataclasses
 import json
-import logging
 import os
 import re
 import subprocess
@@ -12,19 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 PERCEPTUALDIFF_DIFFERENCE_RE = re.compile(r"(\d+) pixels are different")
-
-
-def _match_pattern(pattern: str, value: str) -> bool:
-    """Matches a string against a pattern containing '*' wildcards."""
-    if not pattern:
-        return True
-    elements = pattern.split("*")
-    escaped = [re.escape(component) for component in elements]
-    regex = "^" + ".*".join(escaped) + "$"
-    return bool(re.match(regex, value))
 
 
 @dataclass
@@ -337,164 +323,3 @@ class ComparisonSummary:
             tests_with_differences=data.get("tests_with_differences", {}),
             tests_evaluated=data.get("tests_evaluated", []),
         )
-
-
-@dataclass
-class KnownIssueFilter:
-    """Filter rule matching platform and GL information."""
-
-    platform: str | None = None
-    gl: str | None = None
-    glsl: str | None = None
-
-    def matches(self, machine: str, gl: str, glsl: str) -> bool:
-        if self.platform and not _match_pattern(self.platform, machine):
-            return False
-        if self.gl and not _match_pattern(self.gl, gl):
-            return False
-        return not (self.glsl and not _match_pattern(self.glsl, glsl))
-
-
-@dataclass
-class KnownIssue:
-    """A known issue description with optional environment filters."""
-
-    text: str
-    filter: KnownIssueFilter | None = None
-
-    def matches(self, machine: str, gl: str, glsl: str) -> bool:
-        if not self.filter:
-            return True
-        return self.filter.matches(machine, gl, glsl)
-
-
-class KnownIssuesRegistry:
-    """Registry of known issues per test suite and test case."""
-
-    def __init__(self, data: dict[str, Any] | None = None):
-        self._raw_data: dict[str, Any] = data or {}
-
-    @classmethod
-    def load_from_file(cls, file_path: str) -> KnownIssuesRegistry:
-        if not os.path.isfile(file_path):
-            logger.debug("Known issues file '%s' not found.", file_path)
-            return cls({})
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                return cls(json.load(f))
-        except Exception:
-            logger.exception("Failed to load known issues from '%s'", file_path)
-            return cls({})
-
-    def get_known_issues(self, suite: str, test_name: str, machine: str, gl: str, glsl: str) -> list[str]:
-        """Returns all matching known issues for a given test suite, test case, and environment."""
-        issues: list[str] = []
-        suite_data = self._raw_data.get(suite)
-        if not suite_data:
-            return issues
-
-        # Suite-level issues
-        for issue_dict in suite_data.get("issues", []):
-            issue = self._parse_issue(issue_dict)
-            if issue and issue.matches(machine, gl, glsl):
-                issues.append(issue.text)
-
-        # Test-level issues
-        test_data = suite_data.get(test_name)
-        if test_data:
-            for issue_dict in test_data.get("issues", []):
-                issue = self._parse_issue(issue_dict)
-                if issue and issue.matches(machine, gl, glsl):
-                    issues.append(issue.text)
-
-        return issues
-
-    @staticmethod
-    def _parse_issue(data: dict[str, Any]) -> KnownIssue | None:
-        text = data.get("text")
-        if not text:
-            return None
-        filter_dict = data.get("filter")
-        flt = None
-        if filter_dict:
-            flt = KnownIssueFilter(
-                platform=filter_dict.get("platform"),
-                gl=filter_dict.get("gl"),
-                glsl=filter_dict.get("glsl"),
-            )
-        return KnownIssue(text=text, filter=flt)
-
-
-@dataclass
-class TestResultItem:
-    """Consolidated representation of a test case comparison result."""
-
-    __test__ = False
-
-    suite: str
-    test_name: str
-    result_image_path: str
-    machine: str = ""
-    gl: str = ""
-    glsl: str = ""
-    hw_golden_image_path: str | None = None
-    hw_diff_image_path: str | None = None
-    hw_diff_score: float | None = None
-    xemu_golden_image_path: str | None = None
-    xemu_diff_image_path: str | None = None
-    xemu_diff_score: float | None = None
-    known_issues: list[str] = field(default_factory=list)
-
-    @property
-    def has_diff(self) -> bool:
-        return bool(self.hw_diff_image_path or self.xemu_diff_image_path)
-
-    @property
-    def is_regression(self) -> bool:
-        # A difference against hardware golden is a regression if there's no baseline diff or it's new and not a known issue
-        return bool(
-            self.hw_diff_score is not None
-            and self.hw_diff_score > 0
-            and not self.known_issues
-            and (self.xemu_diff_score is None or self.xemu_diff_score > 0)
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
-
-
-@dataclass
-class PipelineReport:
-    """Top-level structured JSON report produced by the comparison pipeline."""
-
-    generated_at: str
-    results_dir: str
-    golden_dir: str
-    xemu_baseline_dir: str | None
-    total_tests: int = 0
-    passed_tests: int = 0
-    differing_tests: int = 0
-    missing_goldens: int = 0
-    regressions_count: int = 0
-    test_results: list[TestResultItem] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "generated_at": self.generated_at,
-            "results_dir": self.results_dir,
-            "golden_dir": self.golden_dir,
-            "xemu_baseline_dir": self.xemu_baseline_dir,
-            "total_tests": self.total_tests,
-            "passed_tests": self.passed_tests,
-            "differing_tests": self.differing_tests,
-            "missing_goldens": self.missing_goldens,
-            "regressions_count": self.regressions_count,
-            "metadata": self.metadata,
-            "test_results": [item.to_dict() for item in self.test_results],
-        }
-
-    def save_json(self, path: str) -> None:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2, sort_keys=True)

@@ -12,6 +12,7 @@ import sys
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from xemu_pgraph_ci_tools import github, util
 from xemu_pgraph_ci_tools.models import (
     PERCEPTUALDIFF_DIFFERENCE_RE,
     ComparisonSummary,
@@ -24,28 +25,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-
-_HW_GOLDEN_GIT_URL = "https://github.com/abaire/nxdk_pgraph_tests_golden_results.git"
-
-
-def _ensure_path(path: str) -> str:
-    path = os.path.abspath(os.path.expanduser(path))
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def _ensure_cache_path(cache_path: str) -> str:
-    if not cache_path:
-        msg = "cache_path may not be empty"
-        raise ValueError(msg)
-    return _ensure_path(cache_path)
-
-
-def _fetch_hw_goldens(output_dir: str) -> None:
-    from git import Repo
-
-    logger.info("Cloning from %s", _HW_GOLDEN_GIT_URL)
-    Repo.clone_from(_HW_GOLDEN_GIT_URL, output_dir, depth=1)
 
 
 def _compare_lpips(results_info: ResultsInfo, golden_info: ResultsInfo) -> tuple[set[str], set[str], list[Difference]]:
@@ -97,6 +76,7 @@ def _compare_perceptualdiff(
     perceptualdiff: str,
     comparison_output_directory: str,
 ) -> tuple[set[str], set[str], list[Difference]]:
+    """Compares the given results to goldens. Returns (set(only_results), set(only_goldens), list(differences))."""
     results_tests = results_info.get_flattened_tests()
     golden_tests = golden_info.get_flattened_tests()
 
@@ -143,6 +123,7 @@ def perform_comparison(
     include_suites: set[str] | None = None,
     summary_filename: str | None = "summary.json",
 ) -> ComparisonSummary:
+    """Compares the given results to goldens, generating diff files, and returns a summary of the output."""
     results_info = ResultsInfo.parse(results_path, include_suites)
 
     if "nxdk_pgraph_tests_golden_results" in golden_path:
@@ -230,7 +211,7 @@ def discover_diff_tasks(
     comparison_output_dir: str = "",
     skip_existing: bool = True,
 ) -> list[DiffTask]:
-    """Discovers individual diff tasks for images in images_dir."""
+    """Generates DiffTask instances for images that are missing diffs in the output directory."""
     tasks: list[DiffTask] = []
     if not os.path.isdir(images_dir):
         return tasks
@@ -319,11 +300,11 @@ def process_diff_tasks(
     diff_threshold: float = 0.00001,
     use_lpips: bool = False,
     shard_id: str | None = None,
-    stage_dir: str | None = None,
+    staging_dir: str | None = None,
 ) -> dict[str, ComparisonSummary]:
     """Processes a list of DiffTasks, generates difference images, and writes partial summaries."""
-    if stage_dir:
-        os.makedirs(stage_dir, exist_ok=True)
+    if staging_dir:
+        os.makedirs(staging_dir, exist_ok=True)
 
     tasks_by_comp_dir: dict[str, list[DiffTask]] = {}
     for task in tasks:
@@ -360,9 +341,9 @@ def process_diff_tasks(
                 if dist >= diff_threshold:
                     tests_with_differences[fq_name] = dist
                     task.generate_difference_image(perceptualdiff)
-                    if stage_dir and os.path.isfile(task.output_diff_image):
+                    if staging_dir and os.path.isfile(task.output_diff_image):
                         rel = _get_staged_relative_path(task.output_diff_image, output_dir)
-                        dst = os.path.join(stage_dir, rel)
+                        dst = os.path.join(staging_dir, rel)
                         os.makedirs(os.path.dirname(dst), exist_ok=True)
                         shutil.copy2(task.output_diff_image, dst)
                         staged_files_count += 1
@@ -375,9 +356,9 @@ def process_diff_tasks(
                         diff_score = float(match.group(1))
                 if diff_score > 0 or returncode != 0:
                     tests_with_differences[fq_name] = diff_score
-                    if stage_dir and os.path.isfile(task.output_diff_image):
+                    if staging_dir and os.path.isfile(task.output_diff_image):
                         rel = _get_staged_relative_path(task.output_diff_image, output_dir)
-                        dst = os.path.join(stage_dir, rel)
+                        dst = os.path.join(staging_dir, rel)
                         os.makedirs(os.path.dirname(dst), exist_ok=True)
                         shutil.copy2(task.output_diff_image, dst)
                         staged_files_count += 1
@@ -396,15 +377,15 @@ def process_diff_tasks(
         summary_path = os.path.join(comp_dir, summary_filename)
         summary.save_to_file(summary_path)
 
-        if stage_dir and os.path.isfile(summary_path):
+        if staging_dir and os.path.isfile(summary_path):
             rel = _get_staged_relative_path(summary_path, output_dir)
-            dst = os.path.join(stage_dir, rel)
+            dst = os.path.join(staging_dir, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(summary_path, dst)
             staged_files_count += 1
 
-    if stage_dir and staged_files_count == 0:
-        with open(os.path.join(stage_dir, "KEEP_ARTIFACT"), "w", encoding="utf-8") as f:
+    if staging_dir and staged_files_count == 0:
+        with open(os.path.join(staging_dir, "KEEP_ARTIFACT"), "w", encoding="utf-8") as f:
             f.write("")
 
     return summaries
@@ -540,10 +521,10 @@ def _process_arguments_and_run() -> int:
         return 1
 
     if not args.against:
-        cache_path = _ensure_cache_path(args.cache_path)
+        cache_path = util.ensure_cache_path(args.cache_path)
         hw_golden_root = os.path.join(cache_path, "nxdk_pgraph_tests_golden_results")
         if not os.path.isdir(hw_golden_root):
-            _fetch_hw_goldens(hw_golden_root)
+            github.fetch_hw_goldens(hw_golden_root)
         golden_dir = (
             os.path.join(hw_golden_root, "results")
             if os.path.isdir(os.path.join(hw_golden_root, "results"))

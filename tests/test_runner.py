@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from xemu_pgraph_ci_tools.macos import build_macos_xemu_binary_paths
 from xemu_pgraph_ci_tools.runner import (
     _build_emulator_command,
-    _build_macos_xemu_binary_paths,
     _generate_xemu_toml,
 )
 
@@ -74,7 +74,7 @@ class TestRunner(unittest.TestCase):
                 f.write("#!/bin/sh\n")
 
             with patch.dict(os.environ, {}, clear=True):
-                bin_res, config_res = _build_macos_xemu_binary_paths(app_dir)
+                bin_res, config_res = build_macos_xemu_binary_paths(app_dir)
                 assert bin_res == binary_path
                 assert config_res == res_dir
                 assert lib_dir in os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "")

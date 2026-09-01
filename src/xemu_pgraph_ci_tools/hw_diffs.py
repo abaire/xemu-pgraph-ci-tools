@@ -8,9 +8,8 @@ import logging
 import os
 import sys
 
+from xemu_pgraph_ci_tools import github, util
 from xemu_pgraph_ci_tools.comparator import (
-    _ensure_cache_path,
-    _fetch_hw_goldens,
     discover_diff_tasks,
     get_shard_slice,
     process_diff_tasks,
@@ -120,10 +119,10 @@ def identify_missing_hw_diffs(
 ) -> list[DiffTask]:
     """Identifies all missing hardware diff tasks at the test-case level."""
     if not golden_dir:
-        cache_path = _ensure_cache_path(cache_path)
+        cache_path = util.ensure_cache_path(cache_path)
         hw_golden_root = os.path.join(cache_path, "nxdk_pgraph_tests_golden_results")
         if not os.path.isdir(hw_golden_root):
-            _fetch_hw_goldens(hw_golden_root)
+            github.fetch_hw_goldens(hw_golden_root)
         resolved_golden_dir = (
             os.path.join(hw_golden_root, "results")
             if os.path.isdir(os.path.join(hw_golden_root, "results"))
@@ -233,7 +232,7 @@ def _process_hw_diffs(
         output_dir=output_dir,
         perceptualdiff=perceptualdiff,
         shard_id=shard_id,
-        stage_dir=stage_dir,
+        staging_dir=stage_dir,
     )
 
 
@@ -264,7 +263,7 @@ def generate_missing_hw_diffs(
     )
 
 
-def generate_tasks(
+def process_plan_tasks(
     tasks_file: str,
     output_dir: str,
     golden_dir: str | None = None,
@@ -274,18 +273,19 @@ def generate_tasks(
     shard_count: int | None = None,
     stage_dir: str | None = None,
 ) -> None:
+    """Generates diffs for entries in the given plan task file."""
     logger.info("Loading tasks from plan file: %s", tasks_file)
     with open(tasks_file, encoding="utf-8") as f:
         task_dicts = json.load(f)
     tasks = [DiffTask.from_dict(d) for d in task_dicts]
 
     if not golden_dir:
-        cache_path = _ensure_cache_path(cache_path)
+        cache_path = util.ensure_cache_path(cache_path)
         hw_golden_root = os.path.join(cache_path, "nxdk_pgraph_tests_golden_results")
         if not os.path.isdir(hw_golden_root) and any(
             "nxdk_pgraph_tests_golden_results" in t.golden_image for t in tasks
         ):
-            _fetch_hw_goldens(hw_golden_root)
+            github.fetch_hw_goldens(hw_golden_root)
 
     _process_hw_diffs(
         tasks,
@@ -345,7 +345,7 @@ def main() -> int:
         parser.error("--shard-index and --shard-count must be used together")
 
     if args.tasks_file:
-        generate_tasks(
+        process_plan_tasks(
             tasks_file=args.tasks_file,
             output_dir=args.output_dir,
             golden_dir=args.golden_dir,
