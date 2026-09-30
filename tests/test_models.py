@@ -126,6 +126,77 @@ class TestModels(unittest.TestCase):
             assert loaded.tests_without_goldens == ["SuiteA:Test1"]
             assert loaded.tests_with_differences == {"SuiteA:Test3": 12.5}
 
+    def test_run_identifier_double_underscore(self):
+        ident = RunIdentifier(
+            xemu_version="xemu-0.8.136",
+            platform_info="Darwin_arm64",
+            gl_info="gl_Apple:4.10",
+        )
+        assert ident.minimal_path == os.path.join("xemu-0.8.136", "Darwin_arm64", "gl_Apple__4.10")
+        assert ident.minimal_identifier().gl_info == "gl_Apple__4.10"
+        assert ident.gl_version == "gl_Apple"
+        assert ident.glsl_version == "4.10"
+
+        # Parsing compare-results path with double underscore
+        p = "compare-results/xemu-0.8.136/Darwin_arm64/gl_Apple__4.10/Xbox__Xbox__DirectX__nv2a"
+        parsed = RunIdentifier.parse(p)
+        assert parsed.xemu_version == "xemu-0.8.136"
+        assert parsed.platform_info == "Darwin_arm64"
+        assert parsed.gl_version == "gl_Apple"
+        assert parsed.glsl_version == "4.10"
+
+        # Parsing legacy path with double hyphen
+        p_legacy = "compare-results/xemu-0.8.136/Darwin_arm64/gl_Apple--4.10/Xbox--Xbox--DirectX--nv2a"
+        parsed_legacy = RunIdentifier.parse(p_legacy)
+        assert parsed_legacy.xemu_version == "xemu-0.8.136"
+        assert parsed_legacy.platform_info == "Darwin_arm64"
+        assert parsed_legacy.gl_version == "gl_Apple"
+        assert parsed_legacy.glsl_version == "4.10"
+
+    def test_comparison_summary_merge_clears_resolved_goldens(self):
+        # Base summary had false tests_without_goldens
+        base = ComparisonSummary(
+            result_identifier="run1",
+            golden_identifier="Xbox_Hardware",
+            tests_without_goldens=["SuiteA:Test1", "SuiteA:Test2", "SuiteA:MissingGolden"],
+            tests_evaluated=["SuiteA:Test1", "SuiteA:Test2", "SuiteA:MissingGolden"],
+        )
+        # Other summary (e.g. legacy or re-run) evaluated Test1 with diff, and Test2 passed cleanly
+        other = ComparisonSummary(
+            result_identifier="run1",
+            golden_identifier="Xbox_Hardware",
+            tests_with_differences={"SuiteA:Test1": 15.0},
+            tests_evaluated=["SuiteA:Test1", "SuiteA:Test2"],
+            tests_without_goldens=[],
+        )
+        base.merge(other)
+        # Test1 has difference -> NOT without golden
+        # Test2 evaluated and not without golden -> NOT without golden
+        # MissingGolden -> still without golden
+        assert base.tests_without_goldens == ["SuiteA:MissingGolden"]
+        assert "SuiteA:Test1" in base.tests_with_differences
+        assert base.tests_with_differences["SuiteA:Test1"] == 15.0
+
+    def test_comparison_summary_merge_clears_clean_passes(self):
+        # Base summary had a difference on Test1
+        base = ComparisonSummary(
+            result_identifier="run1",
+            golden_identifier="Xbox_Hardware",
+            tests_with_differences={"SuiteA:Test1": 10.0, "SuiteA:Test2": 20.0},
+            tests_evaluated=["SuiteA:Test1", "SuiteA:Test2"],
+        )
+        # Re-run found Test1 now cleanly passes (0 diff, in tests_evaluated, not in diffs or missing)
+        rerun = ComparisonSummary(
+            result_identifier="run1",
+            golden_identifier="Xbox_Hardware",
+            tests_with_differences={},
+            tests_evaluated=["SuiteA:Test1"],
+            tests_without_goldens=[],
+        )
+        base.merge(rerun)
+        assert "SuiteA:Test1" not in base.tests_with_differences
+        assert "SuiteA:Test2" in base.tests_with_differences
+
 
 if __name__ == "__main__":
     unittest.main()

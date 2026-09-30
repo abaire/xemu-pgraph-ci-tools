@@ -348,6 +348,175 @@ class TestHwDiffs(unittest.TestCase):
             assert summary.tests_evaluated == ["SuiteA:Test1"]
             assert summary.tests_without_goldens == []
 
+    def test_identify_missing_hw_diffs_migrates_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_dir = os.path.join(tmpdir, "results", "0.8.0", "Linux_x86_64", "4.6", "4.60")
+            suite_dir = os.path.join(res_dir, "MySuite")
+            os.makedirs(suite_dir)
+            with open(os.path.join(res_dir, "results.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(suite_dir, "test1.png"), "w") as f:
+                f.write("t1")
+
+            golden_dir = os.path.join(tmpdir, "golden")
+            os.makedirs(os.path.join(golden_dir, "MySuite"))
+            with open(os.path.join(golden_dir, "MySuite", "test1.png"), "w") as f:
+                f.write("g1")
+
+            output_dir = os.path.join(tmpdir, "compare-results")
+
+            # Create legacy directory with diff image and summary
+            legacy_dir = os.path.join(
+                output_dir,
+                "0.8.0",
+                "Linux_x86_64",
+                "4.6--4.60",
+                "Xbox--Xbox--DirectX--nv2a",
+            )
+            os.makedirs(os.path.join(legacy_dir, "MySuite"), exist_ok=True)
+            with open(os.path.join(legacy_dir, "MySuite", "test1-diff.png"), "w") as f:
+                f.write("legacy_diff")
+            legacy_summary = ComparisonSummary(
+                result_identifier="0.8.0:Linux_x86_64:4.6:4.60",
+                golden_identifier="Xbox_Hardware",
+                tests_with_differences={"MySuite:test1": 10.0},
+                tests_evaluated=["MySuite:test1"],
+            )
+            legacy_summary.save_to_file(os.path.join(legacy_dir, "summary.json"))
+
+            tasks = identify_missing_hw_diffs(os.path.join(tmpdir, "results"), output_dir, golden_dir=golden_dir)
+            # Since legacy diff image and summary were migrated, test1 diff exists and is not modified -> 0 tasks
+            assert len(tasks) == 0
+
+            # Verify migrated into canonical directory
+            canonical_dir = os.path.join(
+                output_dir,
+                "0.8.0",
+                "Linux_x86_64",
+                "4.6",
+                "4.60",
+                "Xbox__Xbox__DirectX__nv2a",
+            )
+            assert os.path.isfile(os.path.join(canonical_dir, "MySuite", "test1-diff.png"))
+            migrated_summary = ComparisonSummary.load_from_file(os.path.join(canonical_dir, "summary.json"))
+            assert "MySuite:test1" in migrated_summary.tests_with_differences
+
+    def test_identify_missing_hw_diffs_reevaluates_resolved_golden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_dir = os.path.join(tmpdir, "results", "0.8.0", "Linux_x86_64", "4.6", "4.60")
+            suite_dir = os.path.join(res_dir, "MySuite")
+            os.makedirs(suite_dir)
+            with open(os.path.join(res_dir, "results.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(suite_dir, "test1.png"), "w") as f:
+                f.write("t1")
+
+            golden_dir = os.path.join(tmpdir, "golden")
+            os.makedirs(os.path.join(golden_dir, "MySuite"))
+            with open(os.path.join(golden_dir, "MySuite", "test1.png"), "w") as f:
+                f.write("g1")
+
+            output_dir = os.path.join(tmpdir, "compare-results")
+            canonical_dir = os.path.join(
+                output_dir,
+                "0.8.0",
+                "Linux_x86_64",
+                "4.6",
+                "4.60",
+                "Xbox__Xbox__DirectX__nv2a",
+            )
+            os.makedirs(canonical_dir, exist_ok=True)
+            # Summary previously had test1 as missing golden
+            summary = ComparisonSummary(
+                result_identifier="0.8.0:Linux_x86_64:4.6:4.60",
+                golden_identifier="Xbox_Hardware",
+                tests_without_goldens=["MySuite:test1"],
+                tests_evaluated=["MySuite:test1"],
+            )
+            summary.save_to_file(os.path.join(canonical_dir, "summary.json"))
+
+            # Because golden now exists, test1 must be re-evaluated
+            tasks = identify_missing_hw_diffs(os.path.join(tmpdir, "results"), output_dir, golden_dir=golden_dir)
+            assert len(tasks) == 1
+            assert tasks[0].test_case == "test1"
+
+    def test_identify_missing_hw_diffs_regenerates_missing_diff_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_dir = os.path.join(tmpdir, "results", "0.8.0", "Linux_x86_64", "4.6", "4.60")
+            suite_dir = os.path.join(res_dir, "MySuite")
+            os.makedirs(suite_dir)
+            with open(os.path.join(res_dir, "results.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(suite_dir, "test1.png"), "w") as f:
+                f.write("t1")
+
+            golden_dir = os.path.join(tmpdir, "golden")
+            os.makedirs(os.path.join(golden_dir, "MySuite"))
+            with open(os.path.join(golden_dir, "MySuite", "test1.png"), "w") as f:
+                f.write("g1")
+
+            output_dir = os.path.join(tmpdir, "compare-results")
+            canonical_dir = os.path.join(
+                output_dir,
+                "0.8.0",
+                "Linux_x86_64",
+                "4.6",
+                "4.60",
+                "Xbox__Xbox__DirectX__nv2a",
+            )
+            os.makedirs(canonical_dir, exist_ok=True)
+            # Summary recorded a diff, but diff PNG is missing on disk
+            summary = ComparisonSummary(
+                result_identifier="0.8.0:Linux_x86_64:4.6:4.60",
+                golden_identifier="Xbox_Hardware",
+                tests_with_differences={"MySuite:test1": 12.0},
+                tests_evaluated=["MySuite:test1"],
+            )
+            summary.save_to_file(os.path.join(canonical_dir, "summary.json"))
+
+            tasks = identify_missing_hw_diffs(os.path.join(tmpdir, "results"), output_dir, golden_dir=golden_dir)
+            assert len(tasks) == 1
+            assert tasks[0].test_case == "test1"
+
+    @patch("xemu_pgraph_ci_tools.hw_diffs.is_source_image_modified")
+    def test_identify_missing_hw_diffs_detects_modified_source(self, mock_modified: MagicMock) -> None:
+        mock_modified.return_value = True
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_dir = os.path.join(tmpdir, "results", "0.8.0", "Linux_x86_64", "4.6", "4.60")
+            suite_dir = os.path.join(res_dir, "MySuite")
+            os.makedirs(suite_dir)
+            with open(os.path.join(res_dir, "results.json"), "w") as f:
+                f.write("{}")
+            with open(os.path.join(suite_dir, "test1.png"), "w") as f:
+                f.write("t1_new")
+
+            golden_dir = os.path.join(tmpdir, "golden")
+            os.makedirs(os.path.join(golden_dir, "MySuite"))
+            with open(os.path.join(golden_dir, "MySuite", "test1.png"), "w") as f:
+                f.write("g1")
+
+            output_dir = os.path.join(tmpdir, "compare-results")
+            canonical_dir = os.path.join(
+                output_dir,
+                "0.8.0",
+                "Linux_x86_64",
+                "4.6",
+                "4.60",
+                "Xbox__Xbox__DirectX__nv2a",
+            )
+            os.makedirs(canonical_dir, exist_ok=True)
+            summary = ComparisonSummary(
+                result_identifier="0.8.0:Linux_x86_64:4.6:4.60",
+                golden_identifier="Xbox_Hardware",
+                tests_evaluated=["MySuite:test1"],
+            )
+            summary.save_to_file(os.path.join(canonical_dir, "summary.json"))
+
+            # Even though test1 was previously evaluated as clean pass, source was modified so it must be re-run
+            tasks = identify_missing_hw_diffs(os.path.join(tmpdir, "results"), output_dir, golden_dir=golden_dir)
+            assert len(tasks) == 1
+            assert tasks[0].test_case == "test1"
+
 
 if __name__ == "__main__":
     unittest.main()
