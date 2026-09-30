@@ -135,9 +135,8 @@ class TestDiffs(unittest.TestCase):
                 out_dir,
                 "0.8.0",
                 "Linux_x86_64",
-                "4.6",
-                "4.60",
-                "0.7.99__Linux_x86_64__4.6__4.60",
+                "4.6--4.60",
+                "0.7.99--Linux_x86_64--4.6--4.60",
             )
             unified_summary_file = os.path.join(comp_dir, "summary.json")
             assert os.path.isfile(unified_summary_file)

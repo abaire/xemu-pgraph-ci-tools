@@ -46,48 +46,104 @@ def _find_results_paths(results_dir: str) -> set[str]:
     return ret
 
 
-def is_source_image_modified(source_image: str) -> bool:
-    """Checks whether the source image has been modified compared to git HEAD.
+def _parse_git_status_z(output: bytes, repo_root: str) -> set[str]:
+    modified: set[str] = set()
+    parts = output.split(b"\0")
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        if not part:
+            i += 1
+            continue
+        status = part[:2]
+        path_bytes = part[3:]
+        path_str = path_bytes.decode("utf-8", errors="replace")
+        modified.add(os.path.realpath(os.path.join(repo_root, path_str)))
+        if b"R" in status or b"C" in status:
+            i += 1
+            if i < len(parts) and parts[i]:
+                orig_path_str = parts[i].decode("utf-8", errors="replace")
+                modified.add(os.path.realpath(os.path.join(repo_root, orig_path_str)))
+        i += 1
+    return modified
 
-    Returns True if the file has uncommitted changes or is untracked in git.
-    Returns False if the file is tracked and unmodified, or if git check is unavailable.
-    """
-    if not os.path.isfile(source_image):
-        return True
-    try:
-        source_dir = os.path.dirname(os.path.abspath(source_image))
-        filename = os.path.basename(source_image)
-        git_bin = shutil.which("git") or "git"
 
-        # Check if we are inside a git repository
-        ret_git = subprocess.run(
-            [git_bin, "rev-parse", "--is-inside-work-tree"],
-            cwd=source_dir,
-            capture_output=True,
-            check=False,
-        )
-        if ret_git.returncode != 0:
-            return False
+class GitWorkTree:
+    """Tracks modified and untracked files within a git working tree."""
 
-        ret_tracked = subprocess.run(
-            [git_bin, "ls-files", "--error-unmatch", filename],
-            cwd=source_dir,
-            capture_output=True,
-            check=False,
-        )
-        if ret_tracked.returncode != 0:
+    def __init__(self, root_path: str | None = None) -> None:
+        self.repo_root: str | None = self._find_repo_root(root_path) if root_path else None
+        self._modified_files: set[str] = set()
+        if self.repo_root:
+            self._load_status()
+
+    @property
+    def is_git_repo(self) -> bool:
+        return self.repo_root is not None
+
+    @staticmethod
+    def _find_repo_root(path: str) -> str | None:
+        curr = os.path.realpath(path)
+        candidate = curr if os.path.isdir(curr) else os.path.dirname(curr)
+        has_git = False
+        scan = candidate
+        while True:
+            if os.path.exists(os.path.join(scan, ".git")):
+                has_git = True
+                break
+            parent = os.path.dirname(scan)
+            if parent == scan:
+                break
+            scan = parent
+
+        if not has_git:
+            return None
+
+        try:
+            git_bin = shutil.which("git") or "git"
+            ret = subprocess.run(
+                [git_bin, "rev-parse", "--show-toplevel"],
+                cwd=candidate,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if ret.returncode == 0:
+                return os.path.realpath(ret.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return None
+
+    def _load_status(self) -> None:
+        if not self.repo_root:
+            return
+        try:
+            git_bin = shutil.which("git") or "git"
+            ret = subprocess.run(
+                [git_bin, "status", "--porcelain=v1", "-z", "-uall"],
+                cwd=self.repo_root,
+                capture_output=True,
+                check=False,
+            )
+            if ret.returncode == 0:
+                self._modified_files = _parse_git_status_z(ret.stdout, self.repo_root)
+        except (OSError, subprocess.SubprocessError):
+            self._modified_files = set()
+
+    def is_source_image_modified(self, source_image: str) -> bool:
+        """Checks whether the source image has been modified compared to git HEAD.
+
+        Returns True if the file has uncommitted changes or is untracked in git.
+        Returns False if the file is tracked and unmodified, or if git check is unavailable.
+        """
+        if not os.path.isfile(source_image):
             return True
 
-        ret_diff = subprocess.run(
-            [git_bin, "diff", "--quiet", "HEAD", "--", filename],
-            cwd=source_dir,
-            capture_output=True,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    else:
-        return ret_diff.returncode != 0
+        if not self.repo_root:
+            return False
+
+        abs_image = os.path.realpath(source_image)
+        return abs_image in self._modified_files
 
 
 def _find_hw_comparison_paths(output_dir: str) -> set[str]:
@@ -252,8 +308,12 @@ def identify_missing_hw_diffs(
     golden_dir: str | None = None,
     cache_path: str = "cache",
     include_suites: set[str] | None = None,
+    git_tree: GitWorkTree | None = None,
 ) -> list[DiffTask]:
     """Identifies all missing hardware diff tasks at the test-case level."""
+    if git_tree is None:
+        git_tree = GitWorkTree(results_dir)
+
     if not golden_dir:
         cache_path = util.ensure_cache_path(cache_path)
         hw_golden_root = os.path.join(cache_path, "nxdk_pgraph_tests_golden_results")
@@ -308,17 +368,18 @@ def identify_missing_hw_diffs(
             skip_existing=False,
         )
 
+        initial_tasks_count = len(all_tasks)
         for task in run_tasks:
             fq_name = task.fully_qualified_test_name
             golden_exists = os.path.isfile(task.golden_image)
+            if not golden_exists:
+                continue
+
             diff_exists = os.path.isfile(task.output_diff_image)
-            source_modified = is_source_image_modified(task.source_image)
+            source_modified = git_tree.is_source_image_modified(task.source_image)
 
             if source_modified:
                 all_tasks.append(task)
-                continue
-
-            if not golden_exists:
                 continue
 
             if existing_summary:
@@ -345,6 +406,10 @@ def identify_missing_hw_diffs(
 
             if not diff_exists:
                 all_tasks.append(task)
+
+        added_tasks = len(all_tasks) - initial_tasks_count
+        if added_tasks > 0:
+            logger.info("  %s: %d missing diff task(s) identified", run_dir, added_tasks)
 
     logger.info("Identified %d missing HW diff task(s)", len(all_tasks))
     return all_tasks
@@ -398,12 +463,14 @@ def generate_missing_hw_diffs(
     shard_index: int | None = None,
     shard_count: int | None = None,
     stage_dir: str | None = None,
+    git_tree: GitWorkTree | None = None,
 ) -> None:
     tasks = identify_missing_hw_diffs(
         results_dir=results_dir,
         output_dir=output_dir,
         golden_dir=golden_dir,
         cache_path=cache_path,
+        git_tree=git_tree,
     )
     _process_hw_diffs(
         tasks,
@@ -479,12 +546,15 @@ def main() -> int:
         reduce_comparison_summaries(args.output_dir)
         return 0
 
+    git_tree = GitWorkTree(args.results_dir)
+
     if args.output_plan_file:
         tasks = identify_missing_hw_diffs(
             args.results_dir,
             args.output_dir,
             golden_dir=args.golden_dir,
             cache_path=args.cache_path,
+            git_tree=git_tree,
         )
         task_dicts = [t.to_dict() for t in tasks]
         os.makedirs(os.path.dirname(os.path.abspath(args.output_plan_file)), exist_ok=True)
@@ -519,6 +589,7 @@ def main() -> int:
         shard_index=args.shard_index,
         shard_count=args.shard_count,
         stage_dir=args.stage_dir,
+        git_tree=git_tree,
     )
     return 0
 

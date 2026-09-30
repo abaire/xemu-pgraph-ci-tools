@@ -474,7 +474,7 @@ class TestHwDiffs(unittest.TestCase):
             assert len(tasks) == 1
             assert tasks[0].test_case == "test1"
 
-    @patch("xemu_pgraph_ci_tools.hw_diffs.is_source_image_modified")
+    @patch("xemu_pgraph_ci_tools.hw_diffs.GitWorkTree.is_source_image_modified")
     def test_identify_missing_hw_diffs_detects_modified_source(self, mock_modified: MagicMock) -> None:
         mock_modified.return_value = True
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -512,6 +512,63 @@ class TestHwDiffs(unittest.TestCase):
             assert len(tasks) == 1
             assert tasks[0].test_case == "test1"
 
+    def test_parse_git_status_z(self) -> None:
+        from xemu_pgraph_ci_tools.hw_diffs import _parse_git_status_z
+
+        sample = b" M tracked.txt\x00?? sub/untracked.txt\x00R  file2.txt\x00file1.txt\x00"
+        parsed = _parse_git_status_z(sample, "/root")
+        assert os.path.normpath("/root/tracked.txt") in parsed
+        assert os.path.normpath("/root/sub/untracked.txt") in parsed
+        assert os.path.normpath("/root/file2.txt") in parsed
+        assert os.path.normpath("/root/file1.txt") in parsed
+
+    def test_git_work_tree(self) -> None:
+        import subprocess
+        from xemu_pgraph_ci_tools.hw_diffs import GitWorkTree
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize git repo
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, check=True, capture_output=True)
+
+            clean_file = os.path.join(tmpdir, "clean.png")
+            with open(clean_file, "w") as f:
+                f.write("clean")
+
+            mod_file = os.path.join(tmpdir, "mod.png")
+            with open(mod_file, "w") as f:
+                f.write("mod")
+
+            subprocess.run(["git", "add", "clean.png", "mod.png"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, check=True, capture_output=True)
+
+            # Modify mod_file
+            with open(mod_file, "w") as f:
+                f.write("mod_modified")
+
+            # Create untracked file
+            untracked_file = os.path.join(tmpdir, "untracked.png")
+            with open(untracked_file, "w") as f:
+                f.write("untracked")
+
+            tree = GitWorkTree(tmpdir)
+            assert tree.is_git_repo
+            assert not tree.is_source_image_modified(clean_file)
+            assert tree.is_source_image_modified(mod_file)
+            assert tree.is_source_image_modified(untracked_file)
+            assert tree.is_source_image_modified(os.path.join(tmpdir, "nonexistent.png"))
+
+            # Test outside git repo
+            with tempfile.TemporaryDirectory() as non_git:
+                non_git_tree = GitWorkTree(non_git)
+                assert not non_git_tree.is_git_repo
+                f = os.path.join(non_git, "file.png")
+                with open(f, "w") as fp:
+                    fp.write("non_git")
+                assert not non_git_tree.is_source_image_modified(f)
+
 
 if __name__ == "__main__":
     unittest.main()
+
