@@ -375,6 +375,16 @@ def process_diff_tasks(
 
         summary_filename = f"summary.{shard_id}.json" if shard_id else "summary.json"
         summary_path = os.path.join(comp_dir, summary_filename)
+
+        if not shard_id and os.path.isfile(summary_path):
+            try:
+                existing = ComparisonSummary.load_from_file(summary_path)
+                existing.merge(summary)
+                summary = existing
+            except (json.JSONDecodeError, OSError, TypeError, KeyError):
+                logger.debug("Failed to reload summary for %s", summary_path)
+
+        summaries[comp_dir] = summary
         summary.save_to_file(summary_path)
 
         if staging_dir and os.path.isfile(summary_path):

@@ -6,6 +6,8 @@ import argparse
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 
 from xemu_pgraph_ci_tools import github, util
@@ -44,6 +46,50 @@ def _find_results_paths(results_dir: str) -> set[str]:
     return ret
 
 
+def is_source_image_modified(source_image: str) -> bool:
+    """Checks whether the source image has been modified compared to git HEAD.
+
+    Returns True if the file has uncommitted changes or is untracked in git.
+    Returns False if the file is tracked and unmodified, or if git check is unavailable.
+    """
+    if not os.path.isfile(source_image):
+        return True
+    try:
+        source_dir = os.path.dirname(os.path.abspath(source_image))
+        filename = os.path.basename(source_image)
+        git_bin = shutil.which("git") or "git"
+
+        # Check if we are inside a git repository
+        ret_git = subprocess.run(
+            [git_bin, "rev-parse", "--is-inside-work-tree"],
+            cwd=source_dir,
+            capture_output=True,
+            check=False,
+        )
+        if ret_git.returncode != 0:
+            return False
+
+        ret_tracked = subprocess.run(
+            [git_bin, "ls-files", "--error-unmatch", filename],
+            cwd=source_dir,
+            capture_output=True,
+            check=False,
+        )
+        if ret_tracked.returncode != 0:
+            return True
+
+        ret_diff = subprocess.run(
+            [git_bin, "diff", "--quiet", "HEAD", "--", filename],
+            cwd=source_dir,
+            capture_output=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    else:
+        return ret_diff.returncode != 0
+
+
 def _find_hw_comparison_paths(output_dir: str) -> set[str]:
     ret: set[str] = set()
 
@@ -56,7 +102,7 @@ def _find_hw_comparison_paths(output_dir: str) -> set[str]:
         if "summary.json" not in filenames:
             continue
 
-        if os.path.basename(root) != "Xbox__Xbox__DirectX__nv2a":
+        if os.path.basename(root) not in ("Xbox__Xbox__DirectX__nv2a", "Xbox--Xbox--DirectX--nv2a"):
             continue
         logger.info("  Found existing comparison: %s", root)
         ret.add(root)
@@ -84,9 +130,21 @@ def _comparison_path_to_source_path(comparison_path: str, _output_dir: str = "co
 def find_result_dirs_without_hw_diffs(results_dir: str, output_dir: str) -> set[str]:
     result_paths = _find_results_paths(results_dir)
     hw_comparison_paths = _find_hw_comparison_paths(output_dir)
-    source_paths = {
-        os.path.join(results_dir, _comparison_path_to_source_path(path, output_dir)) for path in hw_comparison_paths
-    }
+    source_paths = set()
+    for path in hw_comparison_paths:
+        sub = _comparison_path_to_source_path(path, output_dir)
+        sp = os.path.join(results_dir, sub)
+        if os.path.isdir(sp):
+            source_paths.add(sp)
+        else:
+            for delim in ("--", "__"):
+                if delim in sub:
+                    alt_sp = os.path.join(results_dir, sub.replace(delim, "/"))
+                    if os.path.isdir(alt_sp):
+                        source_paths.add(alt_sp)
+                        break
+            else:
+                source_paths.add(sp)
 
     if source_paths:
         logger.info("Mapped %d existing comparison(s) back to source paths:", len(source_paths))
@@ -108,6 +166,84 @@ def _discover_test_suites(result_dir: str) -> list[str]:
         logger.warning("Could not scan result directory: %s", result_dir)
         suites = []
     return sorted(suites)
+
+
+def _migrate_legacy_comparison_dir(
+    output_dir: str,
+    results_info: ResultsInfo,
+    canonical_comp_dir: str,
+) -> None:
+    """Migrates any diff images and summary from legacy directories into canonical_comp_dir."""
+    gl_subparts = [p for p in results_info.gl_info.replace(":", "/").split("/") if p]
+    legacy_candidates = [
+        os.path.join(output_dir, results_info.output_subdirectory, "Xbox__Xbox__DirectX__nv2a"),
+        os.path.join(
+            output_dir,
+            results_info.xemu_version,
+            results_info.platform_info,
+            results_info.gl_info.replace(":", "__"),
+            "Xbox--Xbox--DirectX--nv2a",
+        ),
+        os.path.join(
+            output_dir,
+            results_info.xemu_version,
+            results_info.platform_info,
+            results_info.gl_info.replace(":", "__"),
+            "Xbox__Xbox__DirectX__nv2a",
+        ),
+        os.path.join(
+            output_dir,
+            results_info.xemu_version,
+            results_info.platform_info,
+            *gl_subparts,
+            "Xbox--Xbox--DirectX--nv2a",
+        ),
+        os.path.join(
+            output_dir,
+            results_info.xemu_version,
+            results_info.platform_info,
+            *gl_subparts,
+            "Xbox__Xbox__DirectX__nv2a",
+        ),
+    ]
+
+    canonical_norm = os.path.abspath(canonical_comp_dir)
+    for legacy_dir in legacy_candidates:
+        if not os.path.isdir(legacy_dir) or os.path.abspath(legacy_dir) == canonical_norm:
+            continue
+
+        logger.info("Found legacy comparison directory: %s; migrating to %s", legacy_dir, canonical_comp_dir)
+        os.makedirs(canonical_comp_dir, exist_ok=True)
+
+        for root, _dirnames, filenames in os.walk(legacy_dir):
+            for f in filenames:
+                if f.endswith("-diff.png"):
+                    rel = os.path.relpath(os.path.join(root, f), legacy_dir)
+                    dest = os.path.join(canonical_comp_dir, rel)
+                    if not os.path.exists(dest):
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        shutil.copy2(os.path.join(root, f), dest)
+
+        legacy_summary_path = os.path.join(legacy_dir, "summary.json")
+        canonical_summary_path = os.path.join(canonical_comp_dir, "summary.json")
+        if os.path.isfile(legacy_summary_path):
+            try:
+                legacy_summary = ComparisonSummary.load_from_file(legacy_summary_path)
+                legacy_summary.result_identifier = legacy_summary.result_identifier.replace("__", "--")
+                legacy_summary.golden_identifier = legacy_summary.golden_identifier.replace("__", "--")
+                if os.path.isfile(canonical_summary_path):
+                    try:
+                        canonical_summary = ComparisonSummary.load_from_file(canonical_summary_path)
+                        canonical_summary.merge(legacy_summary)
+                        canonical_summary.result_identifier = canonical_summary.result_identifier.replace("__", "--")
+                        canonical_summary.golden_identifier = canonical_summary.golden_identifier.replace("__", "--")
+                        canonical_summary.save_to_file(canonical_summary_path)
+                    except (json.JSONDecodeError, OSError, TypeError, KeyError):
+                        legacy_summary.save_to_file(canonical_summary_path)
+                else:
+                    legacy_summary.save_to_file(canonical_summary_path)
+            except (json.JSONDecodeError, OSError, TypeError, KeyError) as e:
+                logger.warning("Could not migrate summary from %s: %s", legacy_summary_path, e)
 
 
 def identify_missing_hw_diffs(
@@ -141,8 +277,10 @@ def identify_missing_hw_diffs(
         comparison_output_dir = os.path.join(
             output_dir,
             results_info.output_subdirectory,
-            "Xbox__Xbox__DirectX__nv2a",
+            "Xbox--Xbox--DirectX--nv2a",
         )
+
+        _migrate_legacy_comparison_dir(output_dir, results_info, comparison_output_dir)
 
         existing_summary = None
         summary_path = os.path.join(comparison_output_dir, "summary.json")
@@ -172,27 +310,41 @@ def identify_missing_hw_diffs(
 
         for task in run_tasks:
             fq_name = task.fully_qualified_test_name
+            golden_exists = os.path.isfile(task.golden_image)
+            diff_exists = os.path.isfile(task.output_diff_image)
+            source_modified = is_source_image_modified(task.source_image)
+
+            if source_modified:
+                all_tasks.append(task)
+                continue
+
+            if not golden_exists:
+                continue
+
             if existing_summary:
                 if existing_summary.tests_evaluated:
+                    if fq_name in existing_summary.tests_without_goldens:
+                        all_tasks.append(task)
+                        continue
+                    if fq_name in existing_summary.tests_with_differences:
+                        if not diff_exists:
+                            all_tasks.append(task)
+                        continue
                     if fq_name in existing_summary.tests_evaluated:
                         continue
                 else:
                     # Legacy summary without explicit tests_evaluated list:
-                    if fq_name in existing_summary.tests_with_differences and os.path.isfile(task.output_diff_image):
+                    if fq_name in existing_summary.tests_with_differences:
+                        if not diff_exists:
+                            all_tasks.append(task)
                         continue
-                    if fq_name in existing_summary.tests_without_goldens and not os.path.isfile(task.golden_image):
+                    if fq_name in existing_summary.tests_without_goldens:
+                        all_tasks.append(task)
                         continue
-                    if (
-                        fq_name not in existing_summary.tests_with_differences
-                        and fq_name not in existing_summary.tests_without_goldens
-                        and os.path.isfile(task.golden_image)
-                    ):
-                        continue
+                    continue
 
-            if os.path.isfile(task.output_diff_image):
-                continue
-
-            all_tasks.append(task)
+            if not diff_exists:
+                all_tasks.append(task)
 
     logger.info("Identified %d missing HW diff task(s)", len(all_tasks))
     return all_tasks

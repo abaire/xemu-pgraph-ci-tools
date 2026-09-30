@@ -24,19 +24,37 @@ class RunIdentifier:
 
     @property
     def gl_version(self) -> str:
-        parts = self.gl_info.split(":") if ":" in self.gl_info else self.gl_info.split("--")
+        if ":" in self.gl_info:
+            parts = self.gl_info.split(":")
+        elif "--" in self.gl_info:
+            parts = self.gl_info.split("--")
+        elif "__" in self.gl_info:
+            parts = self.gl_info.split("__")
+        else:
+            parts = [self.gl_info]
         return parts[0] if parts else ""
 
     @property
     def glsl_version(self) -> str:
-        parts = self.gl_info.split(":") if ":" in self.gl_info else self.gl_info.split("--")
+        if ":" in self.gl_info:
+            parts = self.gl_info.split(":")
+        elif "--" in self.gl_info:
+            parts = self.gl_info.split("--")
+        elif "__" in self.gl_info:
+            parts = self.gl_info.split("__")
+        else:
+            parts = []
         return parts[1] if len(parts) > 1 else ""
 
     @property
     def path(self) -> str:
         if self.run_identifier:
-            return str(os.path.join(*self.run_identifier)).replace(":", "--")
-        return str(os.path.join(self.xemu_version, self.platform_info, self.gl_info)).replace(":", "--")
+            return str(os.path.join(*self.run_identifier)).replace(":", "--").replace("__", "--")
+        return (
+            str(os.path.join(self.xemu_version, self.platform_info, self.gl_info))
+            .replace(":", "--")
+            .replace("__", "--")
+        )
 
     @property
     def minimal_path(self) -> str:
@@ -45,7 +63,7 @@ class RunIdentifier:
 
     def minimal_identifier(self) -> RunIdentifier:
         """Returns a RunIdentifier that omits any extraneous components of the run_identifier member."""
-        formatted_gl = self.gl_info.replace(":", "--")
+        formatted_gl = self.gl_info.replace(":", "--").replace("__", "--")
         return RunIdentifier(
             run_identifier=(self.xemu_version, self.platform_info, formatted_gl),
             xemu_version=self.xemu_version,
@@ -86,13 +104,24 @@ class RunIdentifier:
 
         start_idx = 0
         for i, c in enumerate(components):
-            if c in ("results", "baseline"):
+            if c in ("results", "baseline", "compare-results", "compare"):
                 start_idx = i + 1
-                while start_idx < len(components) and components[start_idx] in ("results", "baseline"):
+                while start_idx < len(components) and components[start_idx] in (
+                    "results",
+                    "baseline",
+                    "compare-results",
+                    "compare",
+                ):
                     start_idx += 1
                 break
 
         subparts = components[start_idx:] if start_idx < len(components) else components
+        if subparts and (
+            subparts[-1] in ("Xbox__Xbox__DirectX__nv2a", "Xbox--Xbox--DirectX--nv2a")
+            or subparts[-1].endswith(".html")
+            or subparts[-1].endswith(".json")
+        ):
+            subparts = subparts[:-1]
         if len(subparts) >= 4:
             xemu_version = subparts[0]
             platform_info = subparts[1]
@@ -186,11 +215,15 @@ class ResultsInfo:
 
     @property
     def output_subdirectory(self) -> str:
-        return os.path.join(self.xemu_version, self.platform_info, self.gl_info.replace(":", "/"))
+        return os.path.join(
+            self.xemu_version,
+            self.platform_info,
+            self.gl_info.replace(":", "--").replace("__", "--"),
+        )
 
     @property
     def run_identifier_subdirectory(self) -> str:
-        return self.run_identifier.replace(":", "__")
+        return self.run_identifier.replace(":", "--").replace("__", "--")
 
     def get_flattened_tests(self) -> set[str]:
         """Return a flattened set of test_suite::test_case."""
@@ -388,10 +421,27 @@ class ComparisonSummary:
         if other.golden_identifier and not self.golden_identifier:
             self.golden_identifier = other.golden_identifier
 
+        tests_with_goldens = (
+            (set(self.tests_evaluated) - set(self.tests_without_goldens))
+            | (set(other.tests_evaluated) - set(other.tests_without_goldens))
+            | set(self.tests_with_differences.keys())
+            | set(other.tests_with_differences.keys())
+        )
         self.tests_with_differences.update(other.tests_with_differences)
-        self.tests_without_goldens = sorted(set(self.tests_without_goldens) | set(other.tests_without_goldens))
-        self.goldens_without_results = sorted(set(self.goldens_without_results) | set(other.goldens_without_results))
+        for t in other.tests_evaluated:
+            if (
+                t not in other.tests_with_differences
+                and t not in other.tests_without_goldens
+                and t in self.tests_with_differences
+            ):
+                del self.tests_with_differences[t]
+
         self.tests_evaluated = sorted(set(self.tests_evaluated) | set(other.tests_evaluated))
+        all_missing_goldens = set(self.tests_without_goldens) | set(other.tests_without_goldens)
+        self.tests_without_goldens = sorted(all_missing_goldens - tests_with_goldens)
+
+        all_missing_results = set(self.goldens_without_results) | set(other.goldens_without_results)
+        self.goldens_without_results = sorted(all_missing_results - set(self.tests_evaluated))
         return self
 
     def to_dict(self) -> dict[str, Any]:
