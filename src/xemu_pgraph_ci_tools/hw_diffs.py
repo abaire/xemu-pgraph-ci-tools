@@ -17,6 +17,11 @@ from xemu_pgraph_ci_tools.comparator import (
     process_diff_tasks,
     reduce_comparison_summaries,
 )
+from xemu_pgraph_ci_tools.golden_config import (
+    DEFAULT_HW_GOLDEN_CONFIG_URL,
+    GoldenConfig,
+    load_golden_config,
+)
 from xemu_pgraph_ci_tools.models import (
     ComparisonSummary,
     DiffTask,
@@ -309,10 +314,14 @@ def identify_missing_hw_diffs(
     cache_path: str = "cache",
     include_suites: set[str] | None = None,
     git_tree: GitWorkTree | None = None,
+    golden_config: GoldenConfig | None = None,
 ) -> list[DiffTask]:
     """Identifies all missing hardware diff tasks at the test-case level."""
     if git_tree is None:
         git_tree = GitWorkTree(results_dir)
+
+    if golden_config is None:
+        golden_config = load_golden_config(golden_dir=golden_dir, cache_path=cache_path)
 
     if not golden_dir:
         cache_path = util.ensure_cache_path(cache_path)
@@ -370,6 +379,9 @@ def identify_missing_hw_diffs(
 
         initial_tasks_count = len(all_tasks)
         for task in run_tasks:
+            if golden_config and golden_config.is_deprecated(task.suite, task.test_case):
+                continue
+
             fq_name = task.fully_qualified_test_name
             golden_exists = os.path.isfile(task.golden_image)
             if not golden_exists:
@@ -464,6 +476,7 @@ def generate_missing_hw_diffs(
     shard_count: int | None = None,
     stage_dir: str | None = None,
     git_tree: GitWorkTree | None = None,
+    golden_config: GoldenConfig | None = None,
 ) -> None:
     tasks = identify_missing_hw_diffs(
         results_dir=results_dir,
@@ -471,6 +484,7 @@ def generate_missing_hw_diffs(
         golden_dir=golden_dir,
         cache_path=cache_path,
         git_tree=git_tree,
+        golden_config=golden_config,
     )
     _process_hw_diffs(
         tasks,
@@ -522,6 +536,12 @@ def main() -> int:
     parser.add_argument("--output-dir", default="compare-results", help="Directory for diff results")
     parser.add_argument("--golden-dir", help="Directory containing golden HW results")
     parser.add_argument("--cache-path", default="cache", help="Path to cache directory for goldens")
+    parser.add_argument("--golden-config", default=None, help="Path to golden config.json file")
+    parser.add_argument(
+        "--golden-config-url",
+        default=DEFAULT_HW_GOLDEN_CONFIG_URL,
+        help="URL for golden config.json",
+    )
     parser.add_argument("--compare-script", default=None, help="Optional compare script")
     parser.add_argument(
         "--perceptualdiff",
@@ -542,8 +562,15 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+    golden_config = load_golden_config(
+        config_path=args.golden_config,
+        golden_dir=args.golden_dir,
+        cache_path=args.cache_path,
+        config_url=args.golden_config_url,
+    )
+
     if args.reduce_summaries:
-        reduce_comparison_summaries(args.output_dir)
+        reduce_comparison_summaries(args.output_dir, golden_config=golden_config)
         return 0
 
     git_tree = GitWorkTree(args.results_dir)
@@ -555,6 +582,7 @@ def main() -> int:
             golden_dir=args.golden_dir,
             cache_path=args.cache_path,
             git_tree=git_tree,
+            golden_config=golden_config,
         )
         task_dicts = [t.to_dict() for t in tasks]
         os.makedirs(os.path.dirname(os.path.abspath(args.output_plan_file)), exist_ok=True)
@@ -590,6 +618,7 @@ def main() -> int:
         shard_count=args.shard_count,
         stage_dir=args.stage_dir,
         git_tree=git_tree,
+        golden_config=golden_config,
     )
     return 0
 

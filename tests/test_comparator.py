@@ -5,8 +5,13 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from xemu_pgraph_ci_tools.comparator import _discover_results, perform_comparison
-from xemu_pgraph_ci_tools.models import Difference
+from xemu_pgraph_ci_tools.comparator import (
+    _discover_results,
+    perform_comparison,
+    reduce_comparison_summaries,
+)
+from xemu_pgraph_ci_tools.golden_config import GoldenConfig
+from xemu_pgraph_ci_tools.models import ComparisonSummary, Difference
 
 
 class TestComparator(unittest.TestCase):
@@ -79,6 +84,27 @@ class TestComparator(unittest.TestCase):
                 assert code == 1
                 assert "100 pixels are different" in stdout
                 mock_run.assert_called_once()
+
+    def test_reduce_comparison_summaries_with_golden_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            comp_dir = os.path.join(tmpdir, "comp_run")
+            os.makedirs(comp_dir)
+            shard1 = ComparisonSummary(
+                result_identifier="v1:Linux",
+                golden_identifier="Xbox_Hardware",
+                goldens_without_results=["SuiteA:Test1", "SuiteB:DeprecatedTest"],
+                tests_with_differences={"SuiteA:Test1": 10.0, "SuiteB:DeprecatedTest": 20.0},
+            )
+            shard1.save_to_file(os.path.join(comp_dir, "summary.shard1.json"))
+
+            cfg = GoldenConfig(deprecated_tests={"SuiteB": ["DeprecatedTest"]})
+            reduce_comparison_summaries(tmpdir, golden_config=cfg)
+
+            final_summary = ComparisonSummary.load_from_file(os.path.join(comp_dir, "summary.json"))
+            assert "SuiteB:DeprecatedTest" not in final_summary.goldens_without_results
+            assert "SuiteA:Test1" in final_summary.goldens_without_results
+            assert "SuiteB:DeprecatedTest" not in final_summary.tests_with_differences
+            assert "SuiteA:Test1" in final_summary.tests_with_differences
 
 
 if __name__ == "__main__":

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from xemu_pgraph_ci_tools.golden_config import (
+    DEFAULT_HW_GOLDEN_CONFIG_URL,
+    GoldenConfig,
+    load_golden_config,
+)
 from xemu_pgraph_ci_tools.models import (
     ComparisonSummary,
     Difference,
@@ -14,9 +19,11 @@ from xemu_pgraph_ci_tools.models import (
 )
 
 __all__ = [
+    "DEFAULT_HW_GOLDEN_CONFIG_URL",
     "ComparisonSummary",
     "DiffTask",
     "Difference",
+    "GoldenConfig",
     "ResultsInfo",
     "RunIdentifier",
     "SourceTestIdentifier",
@@ -26,6 +33,7 @@ __all__ = [
     "get_shard_slice",
     "identify_missing_hw_diffs",
     "identify_missing_xemu_diffs",
+    "load_golden_config",
     "merge_main",
     "partition_diff_tasks",
     "perform_comparison",

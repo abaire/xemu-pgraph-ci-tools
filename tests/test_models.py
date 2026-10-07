@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 
+from xemu_pgraph_ci_tools.golden_config import GoldenConfig
 from xemu_pgraph_ci_tools.models import (
     ComparisonSummary,
     Difference,
@@ -196,6 +197,20 @@ class TestModels(unittest.TestCase):
         base.merge(rerun)
         assert "SuiteA:Test1" not in base.tests_with_differences
         assert "SuiteA:Test2" in base.tests_with_differences
+
+    def test_comparison_summary_filter_deprecated(self):
+        summary = ComparisonSummary(
+            result_identifier="run1",
+            golden_identifier="Xbox_Hardware",
+            goldens_without_results=["SuiteA:Test1", "SuiteB:TestDeprecated"],
+            tests_with_differences={"SuiteA:Test1": 10.0, "SuiteB:TestDeprecated": 20.0},
+        )
+        cfg = GoldenConfig(deprecated_tests={"SuiteB": ["TestDeprecated"]})
+        summary.filter_deprecated(cfg)
+        assert "SuiteB:TestDeprecated" not in summary.goldens_without_results
+        assert "SuiteA:Test1" in summary.goldens_without_results
+        assert "SuiteB:TestDeprecated" not in summary.tests_with_differences
+        assert "SuiteA:Test1" in summary.tests_with_differences
 
 
 if __name__ == "__main__":

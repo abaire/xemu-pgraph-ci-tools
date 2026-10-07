@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -11,7 +12,13 @@ from xemu_pgraph_ci_tools.comparator import (
     process_diff_tasks,
     reduce_comparison_summaries,
 )
-from xemu_pgraph_ci_tools.hw_diffs import identify_missing_hw_diffs, process_plan_tasks
+from xemu_pgraph_ci_tools.golden_config import GoldenConfig
+from xemu_pgraph_ci_tools.hw_diffs import (
+    GitWorkTree,
+    _parse_git_status_z,
+    identify_missing_hw_diffs,
+    process_plan_tasks,
+)
 from xemu_pgraph_ci_tools.models import ComparisonSummary, DiffTask
 
 
@@ -513,8 +520,6 @@ class TestHwDiffs(unittest.TestCase):
             assert tasks[0].test_case == "test1"
 
     def test_parse_git_status_z(self) -> None:
-        from xemu_pgraph_ci_tools.hw_diffs import _parse_git_status_z
-
         sample = b" M tracked.txt\x00?? sub/untracked.txt\x00R  file2.txt\x00file1.txt\x00"
         parsed = _parse_git_status_z(sample, "/root")
         assert os.path.normpath("/root/tracked.txt") in parsed
@@ -523,14 +528,13 @@ class TestHwDiffs(unittest.TestCase):
         assert os.path.normpath("/root/file1.txt") in parsed
 
     def test_git_work_tree(self) -> None:
-        import subprocess
-        from xemu_pgraph_ci_tools.hw_diffs import GitWorkTree
-
         with tempfile.TemporaryDirectory() as tmpdir:
             # Initialize git repo
             subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, check=True, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@test.com"], cwd=tmpdir, check=True, capture_output=True
+            )
 
             clean_file = os.path.join(tmpdir, "clean.png")
             with open(clean_file, "w") as f:
@@ -563,12 +567,44 @@ class TestHwDiffs(unittest.TestCase):
             with tempfile.TemporaryDirectory() as non_git:
                 non_git_tree = GitWorkTree(non_git)
                 assert not non_git_tree.is_git_repo
-                f = os.path.join(non_git, "file.png")
-                with open(f, "w") as fp:
+                file_path = os.path.join(non_git, "file.png")
+                with open(file_path, "w") as fp:
                     fp.write("non_git")
-                assert not non_git_tree.is_source_image_modified(f)
+                assert not non_git_tree.is_source_image_modified(file_path)
+
+    def test_identify_missing_hw_diffs_filters_deprecated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            res_dir = os.path.join(tmpdir, "results", "0.8.0", "Linux_x86_64", "4.6", "4.60")
+            suite_dir = os.path.join(res_dir, "MySuite")
+            os.makedirs(suite_dir)
+            with open(os.path.join(res_dir, "results.json"), "w") as f:
+                f.write("{}")
+
+            with open(os.path.join(suite_dir, "test1.png"), "w") as f:
+                f.write("t1")
+            with open(os.path.join(suite_dir, "deprecated.png"), "w") as f:
+                f.write("dep")
+
+            golden_dir = os.path.join(tmpdir, "goldens")
+            golden_suite = os.path.join(golden_dir, "MySuite")
+            os.makedirs(golden_suite)
+            with open(os.path.join(golden_suite, "test1.png"), "w") as f:
+                f.write("g1")
+            with open(os.path.join(golden_suite, "deprecated.png"), "w") as f:
+                f.write("gdep")
+
+            out_dir = os.path.join(tmpdir, "compare-results")
+
+            cfg = GoldenConfig(deprecated_tests={"MySuite": ["deprecated"]})
+            tasks = identify_missing_hw_diffs(
+                results_dir=os.path.join(tmpdir, "results"),
+                output_dir=out_dir,
+                golden_dir=golden_dir,
+                golden_config=cfg,
+            )
+            assert len(tasks) == 1
+            assert tasks[0].test_case == "test1"
 
 
 if __name__ == "__main__":
     unittest.main()
-

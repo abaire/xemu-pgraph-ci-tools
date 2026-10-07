@@ -8,7 +8,10 @@ import re
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from xemu_pgraph_ci_tools.golden_config import GoldenConfig
 
 PERCEPTUALDIFF_DIFFERENCE_RE = re.compile(r"(\d+) pixels are different")
 
@@ -443,6 +446,17 @@ class ComparisonSummary:
         all_missing_results = set(self.goldens_without_results) | set(other.goldens_without_results)
         self.goldens_without_results = sorted(all_missing_results - set(self.tests_evaluated))
         return self
+
+    def filter_deprecated(self, golden_config: GoldenConfig) -> None:
+        """Removes deprecated tests from goldens_without_results and tests_with_differences."""
+        if not golden_config.has_deprecated_tests:
+            return
+        self.goldens_without_results = [
+            t for t in self.goldens_without_results if not golden_config.is_deprecated_fq(t)
+        ]
+        self.tests_with_differences = {
+            t: d for t, d in self.tests_with_differences.items() if not golden_config.is_deprecated_fq(t)
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {

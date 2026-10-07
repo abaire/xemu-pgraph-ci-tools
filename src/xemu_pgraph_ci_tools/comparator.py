@@ -24,6 +24,8 @@ from xemu_pgraph_ci_tools.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from xemu_pgraph_ci_tools.golden_config import GoldenConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -401,7 +403,10 @@ def process_diff_tasks(
     return summaries
 
 
-def reduce_comparison_summaries(comparison_dir: str) -> None:
+def reduce_comparison_summaries(
+    comparison_dir: str,
+    golden_config: GoldenConfig | None = None,
+) -> None:
     """Finds all summary*.json files in subdirectories of comparison_dir, merges them into summary.json, and cleans up partial files."""
     if not os.path.isdir(comparison_dir):
         logger.info("Comparison directory '%s' does not exist.", comparison_dir)
@@ -441,6 +446,9 @@ def reduce_comparison_summaries(comparison_dir: str) -> None:
                 partial_files_to_delete.append(full_path)
             except (json.JSONDecodeError, OSError, TypeError, KeyError):
                 logger.warning("Could not load partial summary from %s", full_path)
+
+        if golden_config:
+            merged_summary.filter_deprecated(golden_config)
 
         merged_summary.save_to_file(base_summary_file)
         logger.info("Saved unified summary to %s", base_summary_file)
