@@ -30,9 +30,11 @@ class TestModels(unittest.TestCase):
             platform_info="Linux_x86_64",
             suite_name="SuiteA",
             test_name="Test1",
+            gl_info="gl_Mesa--gslv_4.50",
         )
         assert source_test.suite_name == "SuiteA"
         assert source_test.test_name == "Test1"
+        assert source_test.gl_info == "gl_Mesa--gslv_4.50"
 
     def test_results_info_parsing(self):
         fake_path = "/path/to/results/v0.8.15/Linux_x86_64/4.6_Core/4.60"

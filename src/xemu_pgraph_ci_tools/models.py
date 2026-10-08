@@ -162,6 +162,7 @@ class SourceTestIdentifier:
     platform_info: str
     suite_name: str
     test_name: str
+    gl_info: str = ""
 
 
 @dataclass
