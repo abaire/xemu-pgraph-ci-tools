@@ -31,6 +31,7 @@ __all__ = [
     "generate_missing_hw_diffs",
     "generate_xemu_diffs",
     "get_shard_slice",
+    "get_xemu_info",
     "identify_missing_hw_diffs",
     "identify_missing_xemu_diffs",
     "load_golden_config",
@@ -68,6 +69,10 @@ def __getattr__(name: str) -> Any:
         if name == "generate_xemu_diffs":
             return xd.generate_diffs
         return xd.identify_missing_xemu_diffs
+    if name == "get_xemu_info":
+        from xemu_pgraph_ci_tools.runner import get_xemu_info
+
+        return get_xemu_info
     if name == "runner_main":
         from xemu_pgraph_ci_tools.runner import main
 

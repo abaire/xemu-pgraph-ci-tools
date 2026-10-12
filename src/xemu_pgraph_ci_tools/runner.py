@@ -168,25 +168,72 @@ def _build_emulator_command(
     return cmd, toml_path
 
 
-def _determine_output_directory(results_path: str, emulator_command: str, *, is_vulkan: bool) -> str | None:
+def get_xemu_info(
+    xemu_path: str,
+    *,
+    custom_toml_path: str | None = None,
+    no_bundle: bool = False,
+    timeout: float = 1.0,
+) -> EmulatorOutput:
+    """Executes xemu headlessly without an ISO to query version and environment info.
+
+    Parameters:
+        xemu_path: Path to the xemu executable, AppImage, or macOS .app bundle.
+        custom_toml_path: Optional path to a specific xemu.toml config file. If not
+            specified, uses portable mode configuration adjacent to the binary (or
+            within the AppImage/macOS bundle directory structure).
+        no_bundle: If True on macOS, disables searching for or configuring surrounding
+            macOS app bundles and dynamic library search paths (DYLD_FALLBACK_LIBRARY_PATH).
+        timeout: Maximum duration in seconds to wait for xemu to start and output its
+            initial banner/device info before killing the process.
+
+    Returns:
+        EmulatorOutput containing parsed emulator_version, machine_info, and failure_info.
+    """
+    emulator_command, _ = _build_emulator_command(
+        xemu_path,
+        no_bundle=no_bundle,
+        custom_toml_path=custom_toml_path,
+    )
+    return get_xemu_info_from_command(emulator_command, timeout=timeout)
+
+
+def get_xemu_info_from_command(
+    emulator_command: str,
+    *,
+    timeout: float = 1.0,
+) -> EmulatorOutput:
+    """Executes an emulator command template with -display none and without an ISO to query info.
+
+    Parameters:
+        emulator_command: Pre-built emulator command string containing the {ISO} placeholder.
+        timeout: Maximum duration in seconds to wait for xemu to produce initial output.
+
+    Returns:
+        EmulatorOutput containing parsed emulator_version, machine_info, and failure_info.
+    """
     command = Config(emulator_command=emulator_command + " -display none").build_emulator_command(
         "__this_file_does_not_exist"
     )
+
     stderr = ""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=1, env=os.environ)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=timeout, env=os.environ)
         stderr = result.stderr or ""
     except subprocess.TimeoutExpired as err:
         stderr = err.stderr.decode() if isinstance(err.stderr, bytes) else (err.stderr or "")
         sleep(0.5)
     except subprocess.CalledProcessError as err:
         stderr = err.stderr.decode() if isinstance(err.stderr, bytes) else (err.stderr or "")
-        logger.exception("Failed to run emulator command to determine output directory: %s", stderr)
+        logger.exception("Failed to run emulator command to get xemu info: %s", stderr)
         raise
 
-    emulator_output = EmulatorOutput.parse(stdout=[], stderr=stderr.split("\n"))
-    output_directory = get_output_directory(emulator_output.emulator_version, HostProfile(), is_vulkan=is_vulkan)
+    return EmulatorOutput.parse(stdout=[], stderr=stderr.split("\n"))
 
+
+def _determine_output_directory(results_path: str, emulator_command: str, *, is_vulkan: bool) -> str | None:
+    emulator_output = get_xemu_info_from_command(emulator_command)
+    output_directory = get_output_directory(emulator_output.emulator_version, HostProfile(), is_vulkan=is_vulkan)
     return os.path.join(results_path, output_directory)
 
 
