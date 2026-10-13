@@ -14,25 +14,47 @@ logger = logging.getLogger(__name__)
 _HW_GOLDEN_GIT_URL = "https://github.com/abaire/nxdk_pgraph_tests_golden_results.git"
 
 
-def fetch_hw_goldens(output_dir: str) -> None:
+def _resolve_token(github_token: str | None = None) -> str:
+    return (github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+
+
+def fetch_hw_goldens(
+    output_dir: str,
+    github_token: str | None = None,
+) -> None:
     """Clones the Xbox hardware golden result repo."""
     from git import Repo
 
     logger.info("Cloning from %s", _HW_GOLDEN_GIT_URL)
-    Repo.clone_from(_HW_GOLDEN_GIT_URL, output_dir, depth=1)
+    resolved_token = _resolve_token(github_token)
+    clone_url = _HW_GOLDEN_GIT_URL
+    if resolved_token and clone_url.startswith("https://"):
+        clone_url = clone_url.replace("https://", f"https://x-access-token:{resolved_token}@")
+    Repo.clone_from(clone_url, output_dir, depth=1)
 
 
-def _fetch_github_release_info(api_url: str, tag: str = "latest") -> dict[str, Any] | None:
+def _fetch_github_release_info(
+    api_url: str,
+    tag: str = "latest",
+    github_token: str | None = None,
+) -> dict[str, Any] | None:
+    resolved_token = _resolve_token(github_token)
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if resolved_token:
+        headers["Authorization"] = (
+            resolved_token if resolved_token.startswith(("Bearer ", "token ")) else f"Bearer {resolved_token}"
+        )
+
     full_url = f"{api_url}/releases/latest" if not tag or tag == "latest" else f"{api_url}/releases?per_page=60"
 
     def fetch_and_filter(url: str):
         try:
             response = requests.get(
                 url,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
+                headers=headers,
                 timeout=15,
             )
             response.raise_for_status()
@@ -93,10 +115,18 @@ def _filter_release_info_by_tag(release_infos: list[dict[str, Any]], tag: str) -
     return None
 
 
-def download_tester_iso(output_dir: str, tag: str = "latest") -> str | None:
+def download_tester_iso(
+    output_dir: str,
+    tag: str = "latest",
+    github_token: str | None = None,
+) -> str | None:
     """Downloads the latest nxdk_pgraph_tests ISO."""
     logger.info("Fetching info on nxdk_pgraph_tests ISO at release tag %s...", tag)
-    release_info = _fetch_github_release_info("https://api.github.com/repos/abaire/nxdk_pgraph_tests", tag)
+    release_info = _fetch_github_release_info(
+        "https://api.github.com/repos/abaire/nxdk_pgraph_tests",
+        tag,
+        github_token=github_token,
+    )
     if not release_info:
         return None
 
@@ -117,14 +147,25 @@ def download_tester_iso(output_dir: str, tag: str = "latest") -> str | None:
         return None
 
     target_file = os.path.join(output_dir, f"nxdk_pgraph_tests-{release_tag}.iso")
-    _download_artifact(target_file, download_url)
+    _download_artifact(
+        target_file,
+        download_url,
+    )
     return target_file
 
 
-def download_xemu_hdd(output_dir: str, tag: str = "latest") -> str | None:
+def download_xemu_hdd(
+    output_dir: str,
+    tag: str = "latest",
+    github_token: str | None = None,
+) -> str | None:
     """Downloads the latest xemu_hdd image."""
     logger.info("Fetching info on xemu_hdd at release tag %s...", tag)
-    release_info = _fetch_github_release_info("https://api.github.com/repos/xemu-project/xemu-hdd-image", tag)
+    release_info = _fetch_github_release_info(
+        "https://api.github.com/repos/xemu-project/xemu-hdd-image",
+        tag,
+        github_token=github_token,
+    )
     if not release_info:
         return None
 
@@ -149,7 +190,10 @@ def download_xemu_hdd(output_dir: str, tag: str = "latest") -> str | None:
         return target_file
 
     download_file = os.path.join(output_dir, f"xbox_hdd-{release_tag}.qcow2.zip")
-    _download_artifact(download_file, download_url)
+    _download_artifact(
+        download_file,
+        download_url,
+    )
     with zipfile.ZipFile(download_file, "r") as zip_ref:
         for file_info in zip_ref.infolist():
             if file_info.filename.endswith(".qcow2"):
@@ -204,10 +248,18 @@ def _windows_extract_app(archive_file: str, target_executable: str) -> None:
         raise
 
 
-def download_xemu(output_dir: str, tag: str = "latest") -> str | None:
+def download_xemu(
+    output_dir: str,
+    tag: str = "latest",
+    github_token: str | None = None,
+) -> str | None:
     """Downloads the latest xemu release for the current platform."""
     logger.info("Fetching info on xemu at release tag %s...", tag)
-    release_info = _fetch_github_release_info("https://api.github.com/repos/xemu-project/xemu", tag)
+    release_info = _fetch_github_release_info(
+        "https://api.github.com/repos/xemu-project/xemu",
+        tag,
+        github_token=github_token,
+    )
     if not release_info:
         return None
 
@@ -280,7 +332,10 @@ def download_xemu(output_dir: str, tag: str = "latest") -> str | None:
             force_download = cached_tag != requested_version
 
     was_downloaded = _download_artifact(
-        target_file, download_url, artifact_path_override, force_download=force_download
+        target_file,
+        download_url,
+        artifact_path_override,
+        force_download=force_download,
     )
 
     if was_downloaded:

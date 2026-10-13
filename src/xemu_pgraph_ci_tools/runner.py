@@ -218,7 +218,14 @@ def get_xemu_info_from_command(
 
     stderr = ""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=timeout, env=os.environ)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+            env=os.environ,
+        )
         stderr = result.stderr or ""
     except subprocess.TimeoutExpired as err:
         stderr = err.stderr.decode() if isinstance(err.stderr, bytes) else (err.stderr or "")
@@ -641,6 +648,11 @@ def _process_arguments_and_run() -> int:
         action="store_true",
         help="Run emulator in snapshot mode (discards HDD changes on exit).",
     )
+    parser.add_argument(
+        "--github-token",
+        default=None,
+        help="GitHub token for API requests to avoid rate limits (defaults to GITHUB_TOKEN environment variable).",
+    )
 
     args = parser.parse_args()
 
@@ -675,7 +687,9 @@ def _process_arguments_and_run() -> int:
     results_path = util.ensure_results_path(args.results_path)
 
     xemu = (
-        os.path.abspath(os.path.expanduser(args.xemu)) if args.xemu else github.download_xemu(cache_path, args.xemu_tag)
+        os.path.abspath(os.path.expanduser(args.xemu))
+        if args.xemu
+        else github.download_xemu(cache_path, args.xemu_tag, github_token=args.github_token)
     )
     if not xemu:
         logger.error("Failed to download or locate xemu")
@@ -725,12 +739,16 @@ def _process_arguments_and_run() -> int:
     if args.iso:
         iso = os.path.abspath(os.path.expanduser(args.iso))
     else:
-        iso = github.download_tester_iso(cache_path, args.pgraph_tag)
+        iso = github.download_tester_iso(cache_path, args.pgraph_tag, github_token=args.github_token)
     if not iso or not os.path.isfile(iso):
         logger.error("Invalid ISO path '%s'", iso)
         return 1
 
-    hdd = os.path.abspath(os.path.expanduser(args.hdd)) if args.hdd else github.download_xemu_hdd(cache_path)
+    hdd = (
+        os.path.abspath(os.path.expanduser(args.hdd))
+        if args.hdd
+        else github.download_xemu_hdd(cache_path, github_token=args.github_token)
+    )
     if not hdd or not os.path.isfile(hdd):
         logger.error("Invalid xemu_hdd path")
         return 1

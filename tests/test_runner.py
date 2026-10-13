@@ -10,6 +10,7 @@ from xemu_pgraph_ci_tools.macos import build_macos_xemu_binary_paths
 from xemu_pgraph_ci_tools.runner import (
     _build_emulator_command,
     _generate_xemu_toml,
+    _process_arguments_and_run,
 )
 
 
@@ -84,6 +85,26 @@ class TestRunner(unittest.TestCase):
             cmd, toml_path = _build_emulator_command("/path/to/xemu.AppImage")
             assert cmd == '"/path/to/xemu.AppImage" -dvd_path {ISO}'
             assert toml_path == "/path/to/xemu.AppImage.home/.local/share/xemu/xemu/xemu.toml"
+
+    def test_runner_passes_github_token_to_downloads(self):
+        test_args = [
+            "runner.py",
+            "--github-token",
+            "cli_token_456",
+            "--iso",
+            "/fake/iso.iso",
+            "--hdd",
+            "/fake/hdd.qcow2",
+        ]
+
+        with (
+            patch("sys.argv", test_args),
+            patch("xemu_pgraph_ci_tools.github.download_xemu", return_value=None) as mock_download_xemu,
+        ):
+            ret = _process_arguments_and_run()
+            assert ret == 1
+            mock_download_xemu.assert_called_once()
+            assert mock_download_xemu.call_args[1]["github_token"] == "cli_token_456"
 
 
 if __name__ == "__main__":

@@ -28,10 +28,15 @@ __all__ = [
     "RunIdentifier",
     "SourceTestIdentifier",
     "discover_diff_tasks",
+    "download_tester_iso",
+    "download_xemu",
+    "download_xemu_hdd",
+    "fetch_hw_goldens",
     "generate_missing_hw_diffs",
     "generate_xemu_diffs",
     "get_shard_slice",
     "get_xemu_info",
+    "github",
     "identify_missing_hw_diffs",
     "identify_missing_xemu_diffs",
     "load_golden_config",
@@ -69,6 +74,18 @@ def __getattr__(name: str) -> Any:
         if name == "generate_xemu_diffs":
             return xd.generate_diffs
         return xd.identify_missing_xemu_diffs
+    if name in {
+        "download_tester_iso",
+        "download_xemu",
+        "download_xemu_hdd",
+        "fetch_hw_goldens",
+        "github",
+    }:
+        import xemu_pgraph_ci_tools.github as gh
+
+        if name == "github":
+            return gh
+        return getattr(gh, name)
     if name == "get_xemu_info":
         from xemu_pgraph_ci_tools.runner import get_xemu_info
 
