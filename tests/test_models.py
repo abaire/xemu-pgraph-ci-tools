@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
+
+from PIL import Image
 
 from xemu_pgraph_ci_tools.golden_config import GoldenConfig
 from xemu_pgraph_ci_tools.models import (
@@ -12,6 +16,7 @@ from xemu_pgraph_ci_tools.models import (
     ResultsInfo,
     RunIdentifier,
     SourceTestIdentifier,
+    run_perceptualdiff,
 )
 
 
@@ -213,6 +218,60 @@ class TestModels(unittest.TestCase):
         assert "SuiteA:Test1" in summary.goldens_without_results
         assert "SuiteB:TestDeprecated" not in summary.tests_with_differences
         assert "SuiteA:Test1" in summary.tests_with_differences
+
+    def test_run_perceptualdiff_strips_alpha(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_a = os.path.join(tmpdir, "a.png")
+            image_b = os.path.join(tmpdir, "b.png")
+            Image.new("RGBA", (4, 4), (255, 255, 255, 0)).save(image_a)
+            Image.new("RGBA", (4, 4), (204, 0, 0, 254)).save(image_b)
+            output_image = os.path.join(tmpdir, "diff.png")
+
+            seen: dict[str, tuple[str, tuple[int, ...]]] = {}
+
+            def fake_run(cmd, **_kwargs):
+                assert cmd[:3] == ["perceptualdiff", "-output", output_image]
+                for key, path in zip(("a", "b"), cmd[3:], strict=True):
+                    assert path not in {image_a, image_b}
+                    with Image.open(path) as img:
+                        seen[key] = (img.mode, img.getpixel((0, 0)))
+                return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+            with patch("subprocess.run", side_effect=fake_run):
+                code, _stdout, _stderr = run_perceptualdiff("perceptualdiff", output_image, image_a, image_b)
+
+            assert code == 0
+            assert seen == {"a": ("RGB", (255, 255, 255)), "b": ("RGB", (204, 0, 0))}
+
+    def test_run_perceptualdiff_passes_unreadable_images_through(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = os.path.join(tmpdir, "missing.png")
+            not_an_image = os.path.join(tmpdir, "bad.png")
+            with open(not_an_image, "w", encoding="utf-8") as f:
+                f.write("not a png")
+
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"Unknown filetype")
+                code, _stdout, stderr = run_perceptualdiff("perceptualdiff", "out.png", missing, not_an_image)
+
+            assert code == 1
+            assert stderr == "Unknown filetype"
+            assert mock_run.call_args.args[0][3:] == [missing, not_an_image]
+
+    @unittest.skipUnless(shutil.which("perceptualdiff"), "perceptualdiff is not installed")
+    def test_run_perceptualdiff_detects_differences_hidden_by_alpha(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_a = os.path.join(tmpdir, "a.png")
+            image_b = os.path.join(tmpdir, "b.png")
+            # Mirrors depth buffer tests whose output is entirely alpha 0.
+            Image.new("RGBA", (64, 64), (0, 0, 0, 0)).save(image_a)
+            Image.new("RGBA", (64, 64), (0, 64, 0, 0)).save(image_b)
+
+            code, stdout, _stderr = run_perceptualdiff(
+                "perceptualdiff", os.path.join(tmpdir, "diff.png"), image_a, image_b
+            )
+
+            assert code != 0, stdout
 
 
 if __name__ == "__main__":

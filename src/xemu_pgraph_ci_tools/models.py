@@ -6,14 +6,58 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from PIL import Image, UnidentifiedImageError
 
 if TYPE_CHECKING:
     from xemu_pgraph_ci_tools.golden_config import GoldenConfig
 
 PERCEPTUALDIFF_DIFFERENCE_RE = re.compile(r"(\d+) pixels are different")
+
+
+def _save_rgb_copy(source: str, dest: str) -> str:
+    """Saves an alpha-stripped RGB copy of source to dest, returning the path perceptualdiff should use.
+
+    Falls back to the original path if the image cannot be read so that perceptualdiff reports the error.
+    """
+    try:
+        with Image.open(source) as img:
+            img.convert("RGB").save(dest, format="PNG")
+    except (OSError, UnidentifiedImageError):
+        return source
+    return dest
+
+
+def run_perceptualdiff(perceptualdiff: str, output_image: str, image_a: str, image_b: str) -> tuple[int, str, str]:
+    """Runs perceptualdiff on alpha-stripped copies of the given images.
+
+    perceptualdiff weights pixels by their alpha value. The alpha channel of nxdk_pgraph_tests output does not reflect
+    what is displayed (e.g., text is rendered with alpha 0 and some framebuffers are entirely alpha 0), so leaving it
+    in place hides visible differences.
+
+    Returns tuple[ExitCode, STDOUT, STDERR]
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            [
+                perceptualdiff,
+                "-output",
+                output_image,
+                _save_rgb_copy(image_a, os.path.join(tmpdir, "a.png")),
+                _save_rgb_copy(image_b, os.path.join(tmpdir, "b.png")),
+            ],
+            check=False,
+            capture_output=True,
+        )
+    return (
+        result.returncode,
+        result.stdout.decode("utf-8", errors="replace"),
+        result.stderr.decode("utf-8", errors="replace"),
+    )
 
 
 @dataclass(frozen=True)
@@ -310,22 +354,7 @@ class Difference:
         target_filename = os.path.join(output_path, self.difference_filename)
         target_dir = os.path.dirname(target_filename)
         os.makedirs(target_dir, exist_ok=True)
-        result = subprocess.run(
-            [
-                perceptualdiff,
-                "-output",
-                target_filename,
-                self.result_artifact,
-                self.golden_artifact,
-            ],
-            check=False,
-            capture_output=True,
-        )
-        return (
-            result.returncode,
-            result.stdout.decode("utf-8", errors="replace"),
-            result.stderr.decode("utf-8", errors="replace"),
-        )
+        return run_perceptualdiff(perceptualdiff, target_filename, self.result_artifact, self.golden_artifact)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -362,22 +391,7 @@ class DiffTask:
         """
         target_dir = os.path.dirname(self.output_diff_image)
         os.makedirs(target_dir, exist_ok=True)
-        result = subprocess.run(
-            [
-                perceptualdiff,
-                "-output",
-                self.output_diff_image,
-                self.source_image,
-                self.golden_image,
-            ],
-            check=False,
-            capture_output=True,
-        )
-        return (
-            result.returncode,
-            result.stdout.decode("utf-8", errors="replace"),
-            result.stderr.decode("utf-8", errors="replace"),
-        )
+        return run_perceptualdiff(perceptualdiff, self.output_diff_image, self.source_image, self.golden_image)
 
     def to_dict(self) -> dict[str, Any]:
         return {
